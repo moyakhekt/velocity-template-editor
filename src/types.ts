@@ -27,9 +27,7 @@ export interface ContextData {
     url?: string;
     headers?: string;
     httpServletRequestVar?: string | '';
-    methods?: any; // Methods shared across all scenarios
-    scenarios?: ScenariosData; // Named variable sets
-    activeScenario?: string; // Currently selected scenario
-    // Legacy: for backward compatibility
-    context?: any;
+    methods: any; // Methods shared across all scenarios
+    scenarios: ScenariosData; // Named variable sets
+    activeScenario: string; // Currently selected scenario
 }

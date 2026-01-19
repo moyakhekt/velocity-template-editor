@@ -18,10 +18,9 @@ export interface ContextFileData {
     url?: string;
     headers?: string;
     httpServletRequestVar?: string;
-    methods?: any; // Shared methods across scenarios
-    scenarios?: ScenariosData; // Named variable sets
-    activeScenario?: string; // Currently selected scenario
-    context?: ContextData; // Legacy support
+    methods: any; // Shared methods across scenarios
+    scenarios: ScenariosData; // Named variable sets
+    activeScenario: string; // Currently selected scenario
 }
 
 export interface ContextItemWithSource {
@@ -150,7 +149,11 @@ export class ContextManager {
                 try {
                     const content = fs.readFileSync(contextFilePath, 'utf8');
                     const parsed = JSON.parse(content);
-                    templateContextData = this.migrateContextFormat(parsed);
+                    // Expect new format only - no migration
+                    if (!parsed.scenarios) {
+                        throw new Error('Context file is in old format. Please run convert-context-files.js to migrate it.');
+                    }
+                    templateContextData = parsed as ContextFileData;
                 } catch (e) {
                     console.error('Failed to load context file:', e);
                     templateContextData = this.getEmptyContextData();
@@ -218,54 +221,6 @@ export class ContextManager {
         }
         
         return mergedContext;
-    }
-
-    private migrateContextFormat(parsed: any): ContextFileData {
-        // New format already
-        if (parsed.scenarios) {
-            return parsed as ContextFileData;
-        }
-        
-        // Legacy format with just context object
-        if (parsed.context !== undefined) {
-            const legacy = parsed as any;
-            const migrated: ContextFileData = {
-                url: legacy.url,
-                headers: legacy.headers,
-                httpServletRequestVar: legacy.httpServletRequestVar,
-                methods: {},
-                scenarios: { Default: {} },
-                activeScenario: 'Default'
-            };
-            
-            // Separate methods from variables in legacy context
-            for (const [key, value] of Object.entries(legacy.context || {})) {
-                if (this.isMethodsObject(value)) {
-                    migrated.methods![key] = value;
-                } else {
-                    migrated.scenarios!.Default[key] = value;
-                }
-            }
-            
-            return migrated;
-        }
-        
-        // Very old format (just variables at root)
-        const migrated: ContextFileData = {
-            methods: {},
-            scenarios: { Default: {} },
-            activeScenario: 'Default'
-        };
-        
-        for (const [key, value] of Object.entries(parsed || {})) {
-            if (this.isMethodsObject(value)) {
-                migrated.methods![key] = value;
-            } else {
-                migrated.scenarios!.Default[key] = value;
-            }
-        }
-        
-        return migrated;
     }
 
     private getEmptyContextData(): ContextFileData {
@@ -406,7 +361,11 @@ export class ContextManager {
                 try {
                     const content = fs.readFileSync(contextFilePath, 'utf8');
                     const parsed = JSON.parse(content);
-                    contextFileData = this.migrateContextFormat(parsed);
+                    // Expect new format only - no migration
+                    if (!parsed.scenarios) {
+                        throw new Error('Context file is in old format. Please run convert-context-files.js to migrate it.');
+                    }
+                    contextFileData = parsed as ContextFileData;
                 } catch (e) {
                     console.error('Failed to load context file:', e);
                     contextFileData = this.getEmptyContextData();
@@ -446,7 +405,11 @@ export class ContextManager {
             try {
                 const content = fs.readFileSync(contextFilePath, 'utf8');
                 const parsed = JSON.parse(content);
-                const migrated = this.migrateContextFormat(parsed);
+                // Expect new format only - no migration
+                if (!parsed.scenarios) {
+                    throw new Error('Context file is in old format. Please run convert-context-files.js to migrate it.');
+                }
+                const migrated = parsed as ContextFileData;
                 this.contextCache.set(contextFilePath, migrated as any);
                 return migrated;
             } catch (e) {
