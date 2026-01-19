@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { TemplateParser, ContextItem } from './templateParser';
+import { ContextData as ContextDataType, ScenarioData, ScenariosData } from './types';
 
 export interface ContextData {
     [key: string]: any;
@@ -17,7 +18,10 @@ export interface ContextFileData {
     url?: string;
     headers?: string;
     httpServletRequestVar?: string;
-    context: ContextData;
+    methods?: any; // Shared methods across scenarios
+    scenarios?: ScenariosData; // Named variable sets
+    activeScenario?: string; // Currently selected scenario
+    context?: ContextData; // Legacy support
 }
 
 export interface ContextItemWithSource {
@@ -146,35 +150,50 @@ export class ContextManager {
                 try {
                     const content = fs.readFileSync(contextFilePath, 'utf8');
                     const parsed = JSON.parse(content);
-                    // Handle legacy format (just context object) vs new format (with url/headers/context)
-                    if (parsed.context !== undefined) {
-                        templateContextData = parsed as ContextFileData;
-                    } else {
-                        templateContextData = { context: parsed };
-                    }
+                    templateContextData = this.migrateContextFormat(parsed);
                 } catch (e) {
                     console.error('Failed to load context file:', e);
-                    templateContextData = { context: {} };
+                    templateContextData = this.getEmptyContextData();
                 }
             } else {
-                templateContextData = { context: {} };
+                templateContextData = this.getEmptyContextData();
             }
             this.contextCache.set(contextFilePath, templateContextData as any);
         }
         
-        const templateContext = templateContextData.context || {};
+        // Get scenario variables
+        const scenarioVariables = this.getScenarioVariables(templateContextData);
+        const templateMethods = templateContextData.methods || {};
         
         // Merge global context into template context for rendering
         const mergedContext: ContextData = { ...this.globalContext.data };
         
-        // Override with template-specific values and merge objects
-        for (const [key, value] of Object.entries(templateContext)) {
+        // Merge global methods
+        for (const [key, value] of Object.entries(mergedContext)) {
+            if (this.isMethodsObject(value)) {
+                // Merge with template methods if both exist
+                if (templateMethods[key]) {
+                    mergedContext[key] = { ...value, ...templateMethods[key] };
+                }
+            }
+        }
+        
+        // Add template-only methods
+        for (const [key, value] of Object.entries(templateMethods)) {
+            if (!mergedContext[key]) {
+                mergedContext[key] = value;
+            }
+        }
+        
+        // Merge scenario variables (override global)
+        for (const [key, value] of Object.entries(scenarioVariables)) {
             if (typeof value === 'object' && value !== null && !Array.isArray(value) &&
-                typeof mergedContext[key] === 'object' && mergedContext[key] !== null && !Array.isArray(mergedContext[key])) {
-                // Both are objects, merge them
+                typeof mergedContext[key] === 'object' && mergedContext[key] !== null && !Array.isArray(mergedContext[key]) &&
+                !this.isMethodsObject(value)) {
+                // Both are objects (but not methods), merge them
                 mergedContext[key] = { ...mergedContext[key], ...value };
             } else {
-                // Template value takes precedence
+                // Scenario value takes precedence
                 mergedContext[key] = value;
             }
         }
@@ -199,6 +218,85 @@ export class ContextManager {
         }
         
         return mergedContext;
+    }
+
+    private migrateContextFormat(parsed: any): ContextFileData {
+        // New format already
+        if (parsed.scenarios) {
+            return parsed as ContextFileData;
+        }
+        
+        // Legacy format with just context object
+        if (parsed.context !== undefined) {
+            const legacy = parsed as any;
+            const migrated: ContextFileData = {
+                url: legacy.url,
+                headers: legacy.headers,
+                httpServletRequestVar: legacy.httpServletRequestVar,
+                methods: {},
+                scenarios: { Default: {} },
+                activeScenario: 'Default'
+            };
+            
+            // Separate methods from variables in legacy context
+            for (const [key, value] of Object.entries(legacy.context || {})) {
+                if (this.isMethodsObject(value)) {
+                    migrated.methods![key] = value;
+                } else {
+                    migrated.scenarios!.Default[key] = value;
+                }
+            }
+            
+            return migrated;
+        }
+        
+        // Very old format (just variables at root)
+        const migrated: ContextFileData = {
+            methods: {},
+            scenarios: { Default: {} },
+            activeScenario: 'Default'
+        };
+        
+        for (const [key, value] of Object.entries(parsed || {})) {
+            if (this.isMethodsObject(value)) {
+                migrated.methods![key] = value;
+            } else {
+                migrated.scenarios!.Default[key] = value;
+            }
+        }
+        
+        return migrated;
+    }
+
+    private getEmptyContextData(): ContextFileData {
+        return {
+            methods: {},
+            scenarios: { Default: {} },
+            activeScenario: 'Default'
+        };
+    }
+
+    private isMethodsObject(value: any): boolean {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+            return false;
+        }
+        // Check if object contains methods with _implementation
+        return Object.values(value).some(
+            (v: any) => v && typeof v === 'object' && '_implementation' in v
+        );
+    }
+
+    private getScenarioVariables(contextData: ContextFileData): ContextData {
+        if (!contextData.scenarios) {
+            return {};
+        }
+        
+        const activeScenario = contextData.activeScenario || 'Default';
+        const defaultVars = contextData.scenarios.Default || {};
+        const scenarioVars = contextData.scenarios[activeScenario] || {};
+        
+        // Merge Default + active scenario (scenario overrides default)
+        return { ...defaultVars, ...scenarioVars };
     }
 
     private mergeHeaders(globalHeaders?: string, templateHeaders?: string): string {
@@ -299,64 +397,98 @@ export class ContextManager {
         const contextFilePath = this.getContextFilePath(templatePath);
         
         // Check cache first
+        let contextFileData: ContextFileData;
         if (this.contextCache.has(contextFilePath)) {
-            const cached = this.contextCache.get(contextFilePath) as any;
-            const contextData = cached.context || cached;
-            // Exclude HttpServletRequest variable if manually selected
-            if (cached.httpServletRequestVar) {
-                const filtered = { ...contextData };
-                delete filtered[cached.httpServletRequestVar];
-                return filtered;
+            contextFileData = this.contextCache.get(contextFilePath) as any;
+        } else {
+            // Load from file if exists
+            if (fs.existsSync(contextFilePath)) {
+                try {
+                    const content = fs.readFileSync(contextFilePath, 'utf8');
+                    const parsed = JSON.parse(content);
+                    contextFileData = this.migrateContextFormat(parsed);
+                } catch (e) {
+                    console.error('Failed to load context file:', e);
+                    contextFileData = this.getEmptyContextData();
+                }
+            } else {
+                contextFileData = this.getEmptyContextData();
             }
-            return contextData;
+            this.contextCache.set(contextFilePath, contextFileData as any);
         }
         
-        // Load from file if exists
+        // Get scenario variables (for rendering, use active scenario merged with Default)
+        const scenarioVars = this.getScenarioVariables(contextFileData);
+        const methods = contextFileData.methods || {};
+        
+        // Merge methods + scenario variables
+        const result: ContextData = { ...methods, ...scenarioVars };
+        
+        // Exclude HttpServletRequest variable if manually selected
+        if (contextFileData.httpServletRequestVar) {
+            const filtered = { ...result };
+            delete filtered[contextFileData.httpServletRequestVar];
+            return filtered;
+        }
+        
+        return result;
+    }
+
+    // New method to get just the raw file data (for UI editing)
+    private getTemplateContextFileData(templatePath: string): ContextFileData {
+        const contextFilePath = this.getContextFilePath(templatePath);
+        
+        if (this.contextCache.has(contextFilePath)) {
+            return this.contextCache.get(contextFilePath) as any;
+        }
+        
         if (fs.existsSync(contextFilePath)) {
             try {
                 const content = fs.readFileSync(contextFilePath, 'utf8');
-                const data = JSON.parse(content);
-                this.contextCache.set(contextFilePath, data);
-                const contextData = data.context || data;
-                // Exclude HttpServletRequest variable if manually selected
-                if (data.httpServletRequestVar) {
-                    const filtered = { ...contextData };
-                    delete filtered[data.httpServletRequestVar];
-                    return filtered;
-                }
-                return contextData;
+                const parsed = JSON.parse(content);
+                const migrated = this.migrateContextFormat(parsed);
+                this.contextCache.set(contextFilePath, migrated as any);
+                return migrated;
             } catch (e) {
                 console.error('Failed to load context file:', e);
             }
         }
         
-        // Return empty context
-        const emptyContext: ContextData = {};
-        this.contextCache.set(contextFilePath, { context: emptyContext });
-        return emptyContext;
+        const empty = this.getEmptyContextData();
+        this.contextCache.set(contextFilePath, empty as any);
+        return empty;
     }
 
     private async saveContext(templatePath: string, contextData: ContextData): Promise<void> {
         const contextFilePath = this.getContextFilePath(templatePath);
         
-        // Load existing file to preserve url and headers
-        let existingData: ContextFileData = { context: {} };
-        if (fs.existsSync(contextFilePath)) {
-            try {
-                const content = fs.readFileSync(contextFilePath, 'utf8');
-                const parsed = JSON.parse(content);
-                if (parsed.context !== undefined) {
-                    existingData = parsed;
-                } else {
-                    existingData = { context: parsed };
-                }
-            } catch (e) {
-                console.error('Error loading existing context:', e);
+        // Load existing file to preserve structure
+        let existingData: ContextFileData = this.getTemplateContextFileData(templatePath);
+        
+        // Update only the active scenario's variables
+        const activeScenario = existingData.activeScenario || 'Default';
+        if (!existingData.scenarios) {
+            existingData.scenarios = { Default: {} };
+        }
+        if (!existingData.scenarios[activeScenario]) {
+            existingData.scenarios[activeScenario] = {};
+        }
+        
+        // Separate methods from variables in the incoming contextData
+        const updatedMethods: any = {};
+        const updatedVariables: any = {};
+        
+        for (const [key, value] of Object.entries(contextData)) {
+            if (this.isMethodsObject(value)) {
+                updatedMethods[key] = value;
+            } else {
+                updatedVariables[key] = value;
             }
         }
         
-        // Update context but preserve url and headers
-        existingData.context = contextData;
+        // Update methods and scenario variables
+        existingData.methods = updatedMethods;
+        existingData.scenarios[activeScenario] = updatedVariables;
         
         try {
             const content = JSON.stringify(existingData, null, 2);
@@ -1020,6 +1152,71 @@ export class ContextManager {
                     vscode.window.setStatusBarMessage('$(check) Deleted successfully', 3000);
                 }
                 break;
+            
+            case 'switchScenario':
+                const fileData = this.getTemplateContextFileData(currentTemplatePath);
+                fileData.activeScenario = message.scenario;
+                const contextFilePath5 = this.getContextFilePath(currentTemplatePath);
+                fs.writeFileSync(contextFilePath5, JSON.stringify(fileData, null, 2), 'utf8');
+                this.contextCache.set(contextFilePath5, fileData);
+                this.updateWebview(currentTemplatePath);
+                this.refreshPreviewIfOpen(currentTemplatePath);
+                vscode.window.setStatusBarMessage(`$(check) Switched to scenario: ${message.scenario}`, 3000);
+                break;
+            
+            case 'createScenario':
+                const newScenarioName = await vscode.window.showInputBox({
+                    prompt: 'Enter scenario name',
+                    placeHolder: 'e.g., Incorrect Creds, Account Locked',
+                    validateInput: (value) => {
+                        if (!value) return 'Scenario name cannot be empty';
+                        const fileData2 = this.getTemplateContextFileData(currentTemplatePath);
+                        if (fileData2.scenarios && fileData2.scenarios[value]) {
+                            return 'Scenario already exists';
+                        }
+                        return null;
+                    }
+                });
+                if (newScenarioName) {
+                    const fileData3 = this.getTemplateContextFileData(currentTemplatePath);
+                    if (!fileData3.scenarios) {
+                        fileData3.scenarios = { Default: {} };
+                    }
+                    fileData3.scenarios[newScenarioName] = {};
+                    fileData3.activeScenario = newScenarioName;
+                    const contextFilePath6 = this.getContextFilePath(currentTemplatePath);
+                    fs.writeFileSync(contextFilePath6, JSON.stringify(fileData3, null, 2), 'utf8');
+                    this.contextCache.set(contextFilePath6, fileData3);
+                    this.updateWebview(currentTemplatePath);
+                    vscode.window.setStatusBarMessage(`$(check) Created scenario: ${newScenarioName}`, 3000);
+                }
+                break;
+            
+            case 'deleteScenario':
+                if (message.scenario === 'Default') {
+                    vscode.window.showWarningMessage('Cannot delete the Default scenario');
+                    break;
+                }
+                const confirm = await vscode.window.showWarningMessage(
+                    `Delete scenario "${message.scenario}"?`,
+                    { modal: true },
+                    'Delete'
+                );
+                if (confirm === 'Delete') {
+                    const fileData4 = this.getTemplateContextFileData(currentTemplatePath);
+                    if (fileData4.scenarios) {
+                        delete fileData4.scenarios[message.scenario];
+                        if (fileData4.activeScenario === message.scenario) {
+                            fileData4.activeScenario = 'Default';
+                        }
+                    }
+                    const contextFilePath7 = this.getContextFilePath(currentTemplatePath);
+                    fs.writeFileSync(contextFilePath7, JSON.stringify(fileData4, null, 2), 'utf8');
+                    this.contextCache.set(contextFilePath7, fileData4);
+                    this.updateWebview(currentTemplatePath);
+                    vscode.window.setStatusBarMessage(`$(check) Deleted scenario: ${message.scenario}`, 3000);
+                }
+                break;
         }
     }
 
@@ -1540,6 +1737,32 @@ export class ContextManager {
             });
         }
         
+        function switchScenario() {
+            const select = document.getElementById('scenario-select');
+            if (!select || !select.value) return;
+            
+            vscode.postMessage({
+                command: 'switchScenario',
+                scenario: select.value
+            });
+        }
+        
+        function createScenario() {
+            vscode.postMessage({
+                command: 'createScenario'
+            });
+        }
+        
+        function deleteScenario() {
+            const select = document.getElementById('scenario-select');
+            if (!select || !select.value) return;
+            
+            vscode.postMessage({
+                command: 'deleteScenario',
+                scenario: select.value
+            });
+        }
+        
         function addVariableToConfig() {
             const select = document.getElementById('add-variable-select');
             if (!select || !select.value) return;
@@ -1632,22 +1855,15 @@ export class ContextManager {
                 return '<div class="error-banner">Error: Template file path is not set</div>';
             }
         
-        let templateData: ContextFileData = { context: {} };
-        const contextFilePath = this.getContextFilePath(fullPath);
-        console.log('[HttpServletRequest Mapping] contextFilePath:', contextFilePath);
-        
-        if (fs.existsSync(contextFilePath)) {
-            try {
-                const content = fs.readFileSync(contextFilePath, 'utf8');
-                const parsed = JSON.parse(content);
-                templateData = parsed.context !== undefined ? parsed : { context: parsed };
-            } catch (e) {
-                console.error('Error loading template data:', e);
-            }
-        }
+        const templateData: ContextFileData = this.getTemplateContextFileData(fullPath);
+        const activeScenario = templateData.activeScenario || 'Default';
+        const scenarios = templateData.scenarios || { Default: {} };
+        const scenarioNames = Object.keys(scenarios);
         
         console.log('[HttpServletRequest Mapping] Template data:', templateData);
         console.log('[HttpServletRequest Mapping] Manual var:', templateData.httpServletRequestVar);
+        console.log('[Scenarios] Active scenario:', activeScenario);
+        console.log('[Scenarios] Available scenarios:', scenarioNames);
         
         // Detect HttpServletRequest variable (only if not explicitly cleared)
         // Empty string means user cleared it, undefined means not set yet
@@ -1716,6 +1932,36 @@ export class ContextManager {
                     <textarea id="template-headers" onblur="saveTemplateHeaders()" rows="4"
                               placeholder="Content-Type: application/json&#10;Authorization: Bearer token&#10;X-Custom-Header: value">${this.escapeHtml(templateData.headers || '')}</textarea>
                 </div>
+            </div>
+            
+            <div class="config-section" style="margin-top: 20px;">
+                <h3>Test Scenarios</h3>
+                <div class="info-banner">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>Each scenario can override variables from Default. Methods are shared across all scenarios.</span>
+                    </div>
+                </div>
+                <div class="form-field">
+                    <label for="scenario-select">Active Scenario:</label>
+                    <div style="display: flex; gap: 8px;">
+                        <select id="scenario-select" onchange="switchScenario()" style="flex: 1;">
+                            ${scenarioNames.map(name => 
+                                `<option value="${this.escapeHtml(name)}" ${name === activeScenario ? 'selected' : ''}>
+                                    ${name === 'Default' ? '✓ ' : ''}${this.escapeHtml(name)}
+                                </option>`
+                            ).join('')}
+                        </select>
+                        <button onclick="createScenario()" title="Create New Scenario" style="padding: 0 12px;">➕</button>
+                        ${activeScenario !== 'Default' ? 
+                            `<button onclick="deleteScenario()" title="Delete Current Scenario" class="delete" style="padding: 0 12px;">🗑</button>` : 
+                            ''}
+                    </div>
+                </div>
+                ${activeScenario !== 'Default' ? `
+                    <div class="info-banner" style="font-size: 12px; padding: 6px 10px;">
+                        <strong>${this.escapeHtml(activeScenario)}</strong> inherits from Default and overrides specific variables.
+                    </div>
+                ` : ''}
             </div>
         `;
         
