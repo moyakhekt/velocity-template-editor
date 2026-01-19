@@ -1,0 +1,114 @@
+{
+  "name": "velocity-template-editor",
+  "displayName": "Velocity Template Editor",
+  "description": "Apache Velocity template editor with syntax highlighting, live preview, variable management, and method mocks",
+  "version": "0.0.1",
+  "publisher": "velocity-editor",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:velocity",
+    "onLanguage:html"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "velocity",
+        "aliases": [
+          "Velocity",
+          "velocity"
+        ],
+        "extensions": [
+          ".vm",
+          ".vtl",
+          ".velocity",
+          ".html"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "velocity",
+        "scopeName": "text.html.velocity",
+        "path": "./syntaxes/velocity.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "velocity.preview",
+        "title": "Open Preview",
+        "category": "Velocity",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "velocity.manageContext",
+        "title": "Manage Context (Variables & Objects)",
+        "category": "Velocity"
+      },
+      {
+        "command": "velocity.detectInHtml",
+        "title": "Detect Velocity Syntax",
+        "category": "Velocity"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "velocity.preview",
+          "when": "resourceLangId == velocity",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "velocity.manageContext",
+          "when": "resourceLangId == velocity",
+          "group": "velocity@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Velocity Template Editor",
+      "properties": {
+        "velocity.useApacheVelocity": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use Apache Velocity engine for 100% compatibility. Requires Java 11+ and Maven build."
+        },
+        "velocity.preview.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh preview on document changes"
+        },
+        "velocity.preview.refreshDelay": {
+          "type": "number",
+          "default": 500,
+          "description": "Delay in milliseconds before refreshing preview"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node ./esbuild.js",
+    "watch": "node ./esbuild.js --watch",
+    "pretest": "npm run compile",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.x",
+    "@typescript-eslint/parser": "^6.x",
+    "esbuild": "^0.19.x",
+    "eslint": "^8.x",
+    "typescript": "^5.3.x"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "user": {
+    "getEmail": {
+      "name": "getEmail",
+      "implementation": "return \"john.doe@example.com\""
+    },
+    "formatDate": {
+      "name": "formatDate",
+      "implementation": "const date = new Date(args[0]); return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })"
+    },
+    "getFullName": {
+      "name": "getFullName",
+      "implementation": "return args[0] + \" \" + args[1]"
+    },
+    "greet": {
+      "name": "greet",
+      "implementation": "const name = args[0] || 'Guest'; return \"Hello, \" + name + \"!\""
+    }
+  },
+  "util": {
+    "max": {
+      "name": "max",
+      "implementation": "return Math.max(args[0], args[1])"
+    },
+    "capitalize": {
+      "name": "capitalize",
+      "implementation": "return args[0].charAt(0).toUpperCase() + args[0].slice(1)"
+    },
+    "formatCurrency": {
+      "name": "formatCurrency",
+      "implementation": "return \"$\" + parseFloat(args[0]).toFixed(2)"
+    },
+    "getProperty": {
+      "name": "getProperty",
+      "implementation": "const properties = utils.loadProperties('example.properties'); const key = args[0] + '.' + args[1]; return utils.getProperty(properties, key, '[Not Found]')"
+    }
+  }
+}

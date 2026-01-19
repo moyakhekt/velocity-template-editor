@@ -1,0 +1,1239 @@
+import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
+import { TemplateParser, ContextItem } from './templateParser';
+
+export interface ContextData {
+    [key: string]: any;
+}
+
+export interface ContextItemWithSource {
+    value: any;
+    source: 'global' | 'template';
+}
+
+export interface GlobalContextConfig {
+    filePath?: string;
+    data: ContextData;
+}
+
+export class ContextManager {
+    private context: vscode.ExtensionContext;
+    private contextCache: Map<string, ContextData> = new Map();
+    private panel: vscode.WebviewPanel | undefined;
+    private globalContext: GlobalContextConfig = { data: {} };
+    private globalContextLoaded: boolean = false;
+
+    constructor(context: vscode.ExtensionContext) {
+        this.context = context;
+        this.loadGlobalContextPath();
+    }
+
+    private loadGlobalContextPath(): void {
+        const savedPath = this.context.globalState.get<string>('globalContextPath');
+        if (savedPath && fs.existsSync(savedPath)) {
+            try {
+                const content = fs.readFileSync(savedPath, 'utf8');
+                this.globalContext = {
+                    filePath: savedPath,
+                    data: JSON.parse(content)
+                };
+                this.globalContextLoaded = true;
+            } catch (e) {
+                console.error('Error loading global context:', e);
+            }
+        }
+    }
+
+    private async saveGlobalContext(): Promise<void> {
+        if (!this.globalContext.filePath) {
+            return;
+        }
+        try {
+            const content = JSON.stringify(this.globalContext.data, null, 2);
+            fs.writeFileSync(this.globalContext.filePath, content, 'utf8');
+        } catch (e) {
+            vscode.window.showErrorMessage(`Failed to save global context: ${e}`);
+        }
+    }
+
+    private getGlobalValue(name: string): any {
+        return this.globalContext.data[name];
+    }
+
+    async manageContext(): Promise<void> {
+        console.log('=== manageContext called ===');
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showErrorMessage('Please open a file');
+            return;
+        }
+
+        const templatePath = editor.document.uri.fsPath;
+        console.log('Template path:', templatePath);
+        
+        // Check if file contains Velocity syntax (more lenient than language ID check)
+        const content = editor.document.getText();
+        const hasVelocitySyntax = /\$[a-zA-Z_]|#(set|if|foreach|macro|parse|include|define|evaluate)/.test(content);
+        console.log('Has Velocity syntax:', hasVelocitySyntax, 'Language ID:', editor.document.languageId);
+        
+        if (!hasVelocitySyntax && editor.document.languageId !== 'velocity') {
+            const result = await vscode.window.showWarningMessage(
+                'This file does not appear to be a Velocity template. Continue anyway?',
+                'Yes',
+                'No'
+            );
+            if (result !== 'Yes') {
+                return;
+            }
+        } else if (hasVelocitySyntax && editor.document.languageId !== 'velocity') {
+            // Show auto-closing notification when Velocity syntax is detected
+            vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: '✓ Velocity template detected',
+                cancellable: false
+            }, async (progress) => {
+                return new Promise(resolve => setTimeout(resolve, 3000));
+            });
+        }
+
+        this.showContextWebview(templatePath);
+    }
+
+    private showContextWebview(templatePath: string): void {
+        console.log('=== showContextWebview called ===');
+        if (this.panel) {
+            console.log('Panel already exists, updating and revealing it');
+            this.updateWebview(templatePath);
+            this.panel.reveal(vscode.ViewColumn.Two);
+        } else {
+            console.log('Creating new webview panel');
+            this.panel = vscode.window.createWebviewPanel(
+                'velocityContext',
+                'Velocity Context Manager',
+                vscode.ViewColumn.Two,
+                {
+                    enableScripts: true,
+                    retainContextWhenHidden: true,
+                    localResourceRoots: []
+                }
+            );
+
+            this.panel.onDidDispose(() => {
+                console.log('Panel disposed');
+                this.panel = undefined;
+            });
+
+            this.panel.webview.onDidReceiveMessage(
+                async message => {
+                    console.log('Received message from webview:', message.command);
+                    await this.handleWebviewMessage(message, templatePath);
+                },
+                undefined,
+                this.context.subscriptions
+            );
+            
+            // Set HTML AFTER all event handlers are registered
+            this.updateWebview(templatePath);
+        }
+    }
+
+    private async handleWebviewMessage(message: any, templatePath: string): Promise<void> {
+        console.log('=== RECEIVED MESSAGE FROM WEBVIEW ===');
+        console.log('Command:', message.command);
+        console.log('Full message:', JSON.stringify(message));
+        
+        const contextData = this.getContextForTemplate(templatePath);
+        
+        switch (message.command) {
+            case 'test':
+                console.log('Test message received:', message.message);
+                vscode.window.showInformationMessage('Webview button clicked!');
+                break;
+            
+            case 'openDevTools':
+                vscode.commands.executeCommand('workbench.action.webview.openDeveloperTools');
+                break;
+            
+            case 'loadGlobalContext':
+                const loadFile = await vscode.window.showOpenDialog({
+                    canSelectFiles: true,
+                    canSelectFolders: false,
+                    canSelectMany: false,
+                    filters: { 'JSON': ['json'] },
+                    title: 'Load Global Context File'
+                });
+                if (loadFile && loadFile[0]) {
+                    try {
+                        const content = fs.readFileSync(loadFile[0].fsPath, 'utf8');
+                        this.globalContext = {
+                            filePath: loadFile[0].fsPath,
+                            data: JSON.parse(content)
+                        };
+                        this.globalContextLoaded = true;
+                        await this.context.globalState.update('globalContextPath', loadFile[0].fsPath);
+                        this.updateWebview(templatePath);
+                        vscode.window.showInformationMessage('Global context loaded');
+                    } catch (e) {
+                        vscode.window.showErrorMessage(`Failed to load: ${e}`);
+                    }
+                }
+                break;
+            
+            case 'saveGlobalContextAs':
+                const saveFile = await vscode.window.showSaveDialog({
+                    filters: { 'JSON': ['json'] },
+                    defaultUri: this.globalContext.filePath ? vscode.Uri.file(this.globalContext.filePath) : undefined,
+                    title: 'Save Global Context File'
+                });
+                if (saveFile) {
+                    this.globalContext.filePath = saveFile.fsPath;
+                    await this.context.globalState.update('globalContextPath', saveFile.fsPath);
+                    await this.saveGlobalContext();
+                    this.updateWebview(templatePath);
+                    vscode.window.showInformationMessage('Global context saved');
+                }
+                break;
+            
+            case 'saveGlobalVariable':
+                this.globalContext.data[message.name] = message.value;
+                await this.saveGlobalContext();
+                this.updateWebview(templatePath);
+                vscode.window.showInformationMessage(`Global variable $${message.name} saved`);
+                break;
+            
+            case 'saveGlobalProperty':
+                if (!this.globalContext.data[message.objectName]) {
+                    this.globalContext.data[message.objectName] = {};
+                }
+                this.globalContext.data[message.objectName][message.propertyName] = message.value;
+                await this.saveGlobalContext();
+                this.updateWebview(templatePath);
+                vscode.window.showInformationMessage(`Global property saved`);
+                break;
+            
+            case 'saveGlobalMethod':
+                if (!this.globalContext.data[message.objectName]) {
+                    this.globalContext.data[message.objectName] = {};
+                }
+                this.globalContext.data[message.objectName][message.methodName] = {
+                    _implementation: message.implementation
+                };
+                await this.saveGlobalContext();
+                this.updateWebview(templatePath);
+                vscode.window.showInformationMessage(`Global method saved`);
+                break;
+            
+            case 'promoteToGlobal':
+                if (!this.globalContext.filePath) {
+                    vscode.window.showWarningMessage('Please load or create a global context file first');
+                    break;
+                }
+                if (message.itemType === 'variable') {
+                    this.globalContext.data[message.name] = contextData[message.name];
+                } else if (message.itemType === 'property') {
+                    if (!this.globalContext.data[message.objectName]) {
+                        this.globalContext.data[message.objectName] = {};
+                    }
+                    this.globalContext.data[message.objectName][message.propertyName] = 
+                        contextData[message.objectName][message.propertyName];
+                } else if (message.itemType === 'method') {
+                    if (!this.globalContext.data[message.objectName]) {
+                        this.globalContext.data[message.objectName] = {};
+                    }
+                    this.globalContext.data[message.objectName][message.methodName] = 
+                        contextData[message.objectName][message.methodName];
+                }
+                await this.saveGlobalContext();
+                this.updateWebview(templatePath);
+                vscode.window.showInformationMessage('Promoted to global context');
+                break;
+            
+            case 'setSourceGlobal':
+                // When switching to global, remove from template context
+                if (message.itemType === 'variable') {
+                    delete contextData[message.name];
+                } else if (message.itemType === 'property') {
+                    if (contextData[message.objectName]) {
+                        delete contextData[message.objectName][message.propertyName];
+                        if (Object.keys(contextData[message.objectName]).length === 0) {
+                            delete contextData[message.objectName];
+                        }
+                    }
+                } else if (message.itemType === 'method') {
+                    if (contextData[message.objectName]) {
+                        delete contextData[message.objectName][message.methodName];
+                        if (Object.keys(contextData[message.objectName]).length === 0) {
+                            delete contextData[message.objectName];
+                        }
+                    }
+                }
+                await this.saveContext(templatePath, contextData);
+                this.updateWebview(templatePath);
+                break;
+            
+            case 'setSourceTemplate':
+                // When switching to template, add default value if not exists
+                if (message.itemType === 'variable') {
+                    if (!contextData[message.name]) {
+                        contextData[message.name] = '';
+                    }
+                } else if (message.itemType === 'property') {
+                    if (!contextData[message.objectName]) {
+                        contextData[message.objectName] = {};
+                    }
+                    if (!contextData[message.objectName][message.propertyName]) {
+                        contextData[message.objectName][message.propertyName] = '';
+                    }
+                } else if (message.itemType === 'method') {
+                    if (!contextData[message.objectName]) {
+                        contextData[message.objectName] = {};
+                    }
+                    if (!contextData[message.objectName][message.methodName]) {
+                        contextData[message.objectName][message.methodName] = { _implementation: 'return ""' };
+                    }
+                }
+                await this.saveContext(templatePath, contextData);
+                this.updateWebview(templatePath);
+                break;
+            
+            case 'saveVariable':
+                contextData[message.name] = message.value;
+                await this.saveContext(templatePath, contextData);
+                this.updateWebview(templatePath);
+                vscode.window.showInformationMessage(`Variable $${message.name} saved`);
+                break;
+            
+            case 'saveProperty':
+                if (!contextData[message.objectName]) {
+                    contextData[message.objectName] = {};
+                }
+                contextData[message.objectName][message.propertyName] = message.value;
+                await this.saveContext(templatePath, contextData);
+                this.updateWebview(templatePath);
+                vscode.window.showInformationMessage(`Property $${message.objectName}.${message.propertyName} saved`);
+                break;
+            
+            case 'saveMethod':
+                if (!contextData[message.objectName]) {
+                    contextData[message.objectName] = {};
+                }
+                contextData[message.objectName][message.methodName] = {
+                    _implementation: message.implementation
+                };
+                await this.saveContext(templatePath, contextData);
+                this.updateWebview(templatePath);
+                vscode.window.showInformationMessage(`Method $${message.objectName}.${message.methodName}() saved`);
+                break;
+                
+            case 'requestVariableInput':
+                let varValue: string | undefined;
+                const varType = message.inferredType || 'string';
+                
+                if (varType === 'boolean') {
+                    const boolChoice = await vscode.window.showQuickPick(['true', 'false'], {
+                        placeHolder: `Select value for $${message.name}`,
+                        title: `Configure $${message.name} (Boolean)`
+                    });
+                    if (boolChoice !== undefined) {
+                        contextData[message.name] = boolChoice === 'true';
+                        await this.saveContext(templatePath, contextData);
+                        this.updateWebview(templatePath);
+                        vscode.window.showInformationMessage(`Variable $${message.name} = ${boolChoice}`);
+                    }
+                } else if (varType === 'number') {
+                    varValue = await vscode.window.showInputBox({
+                        prompt: `Enter numeric value for $${message.name}`,
+                        value: '0',
+                        validateInput: (text) => {
+                            if (isNaN(Number(text))) {
+                                return 'Please enter a valid number';
+                            }
+                            return null;
+                        }
+                    });
+                    if (varValue !== undefined) {
+                        contextData[message.name] = Number(varValue);
+                        await this.saveContext(templatePath, contextData);
+                        this.updateWebview(templatePath);
+                        vscode.window.showInformationMessage(`Variable $${message.name} = ${varValue}`);
+                    }
+                } else {
+                    // String or URL
+                    const placeholder = varType === 'url' ? 'https://example.com' : 'Enter text value';
+                    varValue = await vscode.window.showInputBox({
+                        prompt: `Enter ${varType} value for $${message.name}`,
+                        value: varType === 'url' ? 'https://' : '',
+                        placeHolder: placeholder
+                    });
+                    if (varValue !== undefined) {
+                        contextData[message.name] = varValue;
+                        await this.saveContext(templatePath, contextData);
+                        this.updateWebview(templatePath);
+                        vscode.window.showInformationMessage(`Variable $${message.name} configured`);
+                    }
+                }
+                break;
+                
+            case 'requestPropertyInput':
+                let propValue: string | undefined;
+                const propType = message.inferredType || 'string';
+                
+                if (propType === 'boolean') {
+                    const boolChoice = await vscode.window.showQuickPick(['true', 'false'], {
+                        placeHolder: `Select value for $${message.objectName}.${message.propertyName}`,
+                        title: `Configure $${message.objectName}.${message.propertyName} (Boolean)`
+                    });
+                    if (boolChoice !== undefined) {
+                        if (!contextData[message.objectName]) {
+                            contextData[message.objectName] = {};
+                        }
+                        contextData[message.objectName][message.propertyName] = boolChoice === 'true';
+                        await this.saveContext(templatePath, contextData);
+                        this.updateWebview(templatePath);
+                        vscode.window.showInformationMessage(`Property configured = ${boolChoice}`);
+                    }
+                } else if (propType === 'number') {
+                    propValue = await vscode.window.showInputBox({
+                        prompt: `Enter numeric value for $${message.objectName}.${message.propertyName}`,
+                        value: '0',
+                        validateInput: (text) => {
+                            if (isNaN(Number(text))) {
+                                return 'Please enter a valid number';
+                            }
+                            return null;
+                        }
+                    });
+                    if (propValue !== undefined) {
+                        if (!contextData[message.objectName]) {
+                            contextData[message.objectName] = {};
+                        }
+                        contextData[message.objectName][message.propertyName] = Number(propValue);
+                        await this.saveContext(templatePath, contextData);
+                        this.updateWebview(templatePath);
+                        vscode.window.showInformationMessage(`Property configured = ${propValue}`);
+                    }
+                } else {
+                    const placeholder = propType === 'url' ? 'https://example.com' : 'Enter text value';
+                    propValue = await vscode.window.showInputBox({
+                        prompt: `Enter ${propType} value for $${message.objectName}.${message.propertyName}`,
+                        value: propType === 'url' ? 'https://' : '',
+                        placeHolder: placeholder
+                    });
+                    if (propValue !== undefined) {
+                        if (!contextData[message.objectName]) {
+                            contextData[message.objectName] = {};
+                        }
+                        contextData[message.objectName][message.propertyName] = propValue;
+                        await this.saveContext(templatePath, contextData);
+                        this.updateWebview(templatePath);
+                        vscode.window.showInformationMessage(`Property configured`);
+                    }
+                }
+                break;
+                
+            case 'requestMethodInput':
+                let template;
+                if (message.paramCount === 0) {
+                    template = 'return "Mock result"';
+                } else if (message.paramCount === 1) {
+                    template = 'return args[0] + " processed"';
+                } else {
+                    template = 'return args[0] + "-" + args[1]';
+                }
+                
+                const methodImpl = await vscode.window.showInputBox({
+                    prompt: `Enter implementation for $${message.objectName}.${message.methodName}() - Parameters available in args array`,
+                    value: template,
+                    validateInput: (text) => {
+                        if (!text || !text.trim()) {
+                            return 'Implementation cannot be empty';
+                        }
+                        return null;
+                    }
+                });
+                if (methodImpl !== undefined && methodImpl.trim()) {
+                    if (!contextData[message.objectName]) {
+                        contextData[message.objectName] = {};
+                    }
+                    contextData[message.objectName][message.methodName] = {
+                        _implementation: methodImpl
+                    };
+                    await this.saveContext(templatePath, contextData);
+                    this.updateWebview(templatePath);
+                    vscode.window.showInformationMessage(`Method $${message.objectName}.${message.methodName}() configured`);
+                }
+                break;
+                
+            case 'requestDeleteConfirm':
+                const deleteChoice = await vscode.window.showWarningMessage(
+                    message.message,
+                    { modal: true },
+                    'Delete'
+                );
+                if (deleteChoice === 'Delete') {
+                    if (message.type === 'variable') {
+                        delete contextData[message.name];
+                    } else if (message.type === 'property') {
+                        if (contextData[message.objectName]) {
+                            delete contextData[message.objectName][message.propertyName];
+                            if (Object.keys(contextData[message.objectName]).length === 0) {
+                                delete contextData[message.objectName];
+                            }
+                        }
+                    } else if (message.type === 'method') {
+                        if (contextData[message.objectName]) {
+                            delete contextData[message.objectName][message.methodName];
+                            if (Object.keys(contextData[message.objectName]).length === 0) {
+                                delete contextData[message.objectName];
+                            }
+                        }
+                    }
+                    await this.saveContext(templatePath, contextData);
+                    this.updateWebview(templatePath);
+                    vscode.window.showInformationMessage('Deleted successfully');
+                }
+                break;
+        }
+    }
+
+    private updateWebview(templatePath: string): void {
+        console.log('=== updateWebview called for:', templatePath);
+        if (!this.panel) {
+            console.log('ERROR: panel is undefined!');
+            return;
+        }
+
+        const contextData = this.getContextForTemplate(templatePath);
+        
+        // Extract context structure from template
+        let contextItems: Map<string, ContextItem> = new Map();
+        let parseError: string | undefined;
+        try {
+            const templateContent = fs.readFileSync(templatePath, 'utf8');
+            contextItems = TemplateParser.analyzeContext(templateContent);
+            
+            // Debug logging
+            console.log('Template content length:', templateContent.length);
+            console.log('Context items found:', contextItems.size);
+            contextItems.forEach((item, key) => {
+                console.log(`- ${key}: ${item.type}`, 
+                    item.properties ? `props=${item.properties.size}` : '',
+                    item.methods ? `methods=${item.methods.size}` : ''
+                );
+            });
+        } catch (error) {
+            console.error('Failed to parse template:', error);
+            parseError = error instanceof Error ? error.message : String(error);
+        }
+        
+        const html = this.getWebviewHtml(contextData, contextItems, path.basename(templatePath), parseError);
+        console.log('=== About to set webview HTML ===');
+        console.log('HTML length:', html.length);
+        
+        // Write HTML to temp file for inspection
+        const tempPath = path.join(os.tmpdir(), 'velocity-context-debug.html');
+        fs.writeFileSync(tempPath, html, 'utf8');
+        console.log('Debug HTML written to:', tempPath);
+        
+        console.log('=== About to set webview HTML ===');
+        console.log('Panel exists:', !!this.panel);
+        console.log('Panel visible:', this.panel?.visible);
+        console.log('Panel active:', this.panel?.active);
+        console.log('Webview exists:', !!this.panel?.webview);
+        
+        this.panel.webview.html = html;
+        
+        console.log('=== Webview HTML set complete ===');
+    }
+
+    private getWebviewHtml(contextData: ContextData, contextItems: Map<string, ContextItem>, templateName: string, parseError?: string): string {
+        const items = Array.from(contextItems.values());
+        
+        // Generate a nonce for security
+        const nonce = this.getNonce();
+        
+        // Separate configured and unconfigured items
+        const unconfiguredItems = items.filter(item => !contextData[item.name]);
+        const configuredItems = items.filter(item => contextData[item.name]);
+        
+        const html = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: var(--vscode-font-family);
+            font-size: var(--vscode-font-size);
+            color: var(--vscode-foreground);
+            background: var(--vscode-editor-background);
+            padding: 20px;
+            margin: 0;
+        }
+        h1 { font-size: 1.5em; margin: 0 0 10px 0; }
+        h3 { margin: 20px 0 10px 0; font-size: 1.1em; }
+        .template-name {
+            color: var(--vscode-descriptionForeground);
+            font-size: 0.9em;
+            margin-bottom: 20px;
+        }
+        .info-banner {
+            background: var(--vscode-inputValidation-warningBackground);
+            border-left: 4px solid var(--vscode-inputValidation-warningBorder);
+            padding: 12px;
+            margin-bottom: 20px;
+        }
+        .error-banner {
+            background: var(--vscode-inputValidation-errorBackground);
+            border-left: 4px solid var(--vscode-inputValidation-errorBorder);
+            padding: 12px;
+            margin-bottom: 20px;
+            color: var(--vscode-errorForeground);
+        }
+        .context-item {
+            background: var(--vscode-input-background);
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 4px;
+            margin-bottom: 15px;
+            overflow: hidden;
+        }
+        .item-header {
+            padding: 12px;
+            background: var(--vscode-editorGroupHeader-tabsBackground);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+        .item-header:hover {
+            background: var(--vscode-list-hoverBackground);
+        }
+        .item-name {
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-weight: 600;
+            font-size: 1.05em;
+        }
+        .item-type {
+            font-size: 0.85em;
+            color: var(--vscode-descriptionForeground);
+            text-transform: uppercase;
+            margin-left: 8px;
+        }
+        .item-meta {
+            font-size: 0.85em;
+            color: var(--vscode-descriptionForeground);
+        }
+        .item-body {
+            padding: 12px;
+            border-top: 1px solid var(--vscode-panel-border);
+        }
+        .nested-item {
+            padding: 8px;
+            border-left: 3px solid var(--vscode-textLink-foreground);
+            margin: 8px 0;
+            background: var(--vscode-textBlockQuote-background);
+        }
+        .nested-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+        .nested-name {
+            font-family: 'Consolas', 'Courier New', monospace;
+            color: var(--vscode-symbolIcon-propertyForeground, #75BEFF);
+        }
+        .method-name {
+            color: var(--vscode-symbolIcon-methodForeground, #B180D7);
+        }
+        .nested-value {
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 0.9em;
+            margin-top: 4px;
+            color: var(--vscode-editor-foreground);
+        }
+        button {
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            padding: 4px 10px;
+            cursor: pointer;
+            border-radius: 2px;
+            font-size: 0.85em;
+        }
+        button:hover {
+            background: var(--vscode-button-hoverBackground);
+        }
+        button.secondary {
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+        }
+        button.secondary:hover {
+            background: var(--vscode-button-secondaryHoverBackground);
+        }
+        .context-line {
+            font-size: 0.8em;
+            color: var(--vscode-descriptionForeground);
+            font-family: 'Consolas', 'Courier New', monospace;
+            margin-top: 4px;
+            font-style: italic;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--vscode-descriptionForeground);
+        }
+    </style>
+</head>
+<body>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <div>
+            <h1 style="margin: 0;">🔧 Velocity Context Manager</h1>
+            <div class="template-name" style="margin: 5px 0 0 0;">Template: ${this.escapeHtml(templateName)}</div>
+        </div>
+        <button onclick="openDevTools()" title="Open Developer Tools" style="background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; padding: 8px 12px; cursor: pointer; border-radius: 4px; font-size: 1.2em;">🛠️</button>
+    </div>
+    
+    ${parseError ? `
+        <div class="error-banner">
+            <strong>⚠️ Parse Error:</strong> ${this.escapeHtml(parseError)}
+        </div>
+    ` : ''}
+    
+    ${unconfiguredItems.length > 0 ? `
+        <div class="info-banner">
+            <strong>📋 ${unconfiguredItems.length} item(s) detected in template</strong> - Configure values and implementations below
+        </div>
+        
+        <h3>Detected in Template</h3>
+        ${unconfiguredItems.map(item => this.renderContextItem(item, contextData, false)).join('')}
+    ` : ''}
+    
+    ${configuredItems.length > 0 ? `
+        <h3>Configured Context</h3>
+        ${configuredItems.map(item => this.renderContextItem(item, contextData, true)).join('')}
+    ` : unconfiguredItems.length === 0 ? `
+        <div class="empty-state">
+            <p>No variables or objects detected in template.</p>
+        </div>
+    ` : ''}
+    
+    <script>
+        (function() {
+            const vscode = acquireVsCodeApi();
+            
+            window.addEventListener('message', function(event) {
+                console.log('Message from extension:', event.data);
+            });
+            
+            window.testClick = function() {
+                vscode.postMessage({ command: 'test', message: 'Button clicked!' });
+            };
+            
+            window.openDevTools = function() {
+                vscode.postMessage({ command: 'openDevTools' });
+            };
+            
+            // Variable inline editing
+            window.editVariableByName = function(name) {
+                const item = document.querySelector('[data-var-name="' + name + '"]');
+                if (!item) return;
+                
+                const inferredType = item.getAttribute('data-var-type') || 'string';
+                const bodyDiv = document.getElementById('var-body-' + name);
+                const editDiv = document.getElementById('var-edit-' + name);
+                const textarea = document.getElementById('var-input-' + name);
+                
+                // Hide all other edit divs
+                document.querySelectorAll('[id^="var-edit-"]').forEach(el => el.style.display = 'none');
+                document.querySelectorAll('[id^="var-body-"]').forEach(el => el.style.display = 'block');
+                
+                if (editDiv && bodyDiv && textarea) {
+                    bodyDiv.style.display = 'none';
+                    editDiv.style.display = 'block';
+                    
+                    // If textarea is empty, set default value based on type
+                    if (!textarea.value) {
+                        if (inferredType === 'number') {
+                            textarea.value = '0';
+                        } else if (inferredType === 'boolean') {
+                            textarea.value = 'false';
+                        } else if (inferredType === 'url') {
+                            textarea.value = '"https://"';
+                        } else {
+                            textarea.value = '""';
+                        }
+                    }
+                    textarea.focus();
+                }
+            };
+            
+            window.editVariable = function(name, inferredType, currentValue) {
+                document.querySelectorAll('[id^="var-edit-"]').forEach(el => el.style.display = 'none');
+                document.querySelectorAll('[id^="var-body-"]').forEach(el => el.style.display = 'block');
+                
+                const editDiv = document.getElementById('var-edit-' + name);
+                const bodyDiv = document.getElementById('var-body-' + name);
+                const textarea = document.getElementById('var-input-' + name);
+                
+                if (editDiv && bodyDiv && textarea) {
+                    bodyDiv.style.display = 'none';
+                    editDiv.style.display = 'block';
+                    
+                    const decodedValue = currentValue.replace(/&#10;/g, '\\n');
+                    textarea.value = decodedValue || (inferredType === 'number' ? '0' : inferredType === 'boolean' ? 'false' : '\"\"');
+                    textarea.focus();
+                }
+            };
+            
+            window.saveVariable = function(name, inferredType) {
+                const textarea = document.getElementById('var-input-' + name);
+                if (!textarea) return;
+                
+                const value = textarea.value.trim();
+                if (!value) {
+                    alert('Please enter a value');
+                    return;
+                }
+                
+                try {
+                    const parsedValue = JSON.parse(value);
+                    vscode.postMessage({
+                        command: 'saveVariable',
+                        name: name,
+                        value: parsedValue
+                    });
+                } catch (e) {
+                    alert('Invalid JSON: ' + e.message);
+                }
+            };
+            
+            window.cancelEditVariable = function(name) {
+                const editDiv = document.getElementById('var-edit-' + name);
+                const bodyDiv = document.getElementById('var-body-' + name);
+                if (editDiv && bodyDiv) {
+                    editDiv.style.display = 'none';
+                    bodyDiv.style.display = 'block';
+                }
+            };
+            
+            // Property inline editing
+            window.editProperty = function(objectName, propertyName, propType, currentValue, propId) {
+                document.querySelectorAll('[id^=\"prop-edit-\"]').forEach(el => el.style.display = 'none');
+                document.querySelectorAll('[id^=\"prop-body-\"]').forEach(el => el.style.display = 'block');
+                
+                const editDiv = document.getElementById('prop-edit-' + propId);
+                const bodyDiv = document.getElementById('prop-body-' + propId);
+                const input = document.getElementById('prop-input-' + propId);
+                
+                if (editDiv && bodyDiv && input) {
+                    bodyDiv.style.display = 'none';
+                    editDiv.style.display = 'block';
+                    
+                    const decodedValue = currentValue.replace(/&#10;/g, '\\n');
+                    input.value = decodedValue || (propType === 'number' ? '0' : propType === 'boolean' ? 'false' : propType === 'url' ? 'https://' : '\"\"');
+                    input.focus();
+                }
+            };
+            
+            window.saveProperty = function(objectName, propertyName, propType, propId) {
+                const input = document.getElementById('prop-input-' + propId);
+                if (!input) return;
+                
+                const value = input.value.trim();
+                if (!value) {
+                    alert('Please enter a value');
+                    return;
+                }
+                
+                try {
+                    const parsedValue = JSON.parse(value);
+                    vscode.postMessage({
+                        command: 'saveProperty',
+                        objectName: objectName,
+                        propertyName: propertyName,
+                        value: parsedValue
+                    });
+                } catch (e) {
+                    alert('Invalid JSON: ' + e.message);
+                }
+            };
+            
+            window.cancelEditProperty = function(propId) {
+                const editDiv = document.getElementById('prop-edit-' + propId);
+                const bodyDiv = document.getElementById('prop-body-' + propId);
+                if (editDiv && bodyDiv) {
+                    editDiv.style.display = 'none';
+                    bodyDiv.style.display = 'block';
+                }
+            };
+            
+            // Method inline editing
+            window.editMethodByName = function(objectName, methodName, paramCount) {
+                const methodId = (objectName + '-' + methodName).replace(/[^a-zA-Z0-9]/g, '_');
+                const bodyDiv = document.getElementById('method-body-' + methodId);
+                const editDiv = document.getElementById('method-edit-' + methodId);
+                const textarea = document.getElementById('method-input-' + methodId);
+                
+                // Hide all other edit divs
+                document.querySelectorAll('[id^="method-edit-"]').forEach(el => el.style.display = 'none');
+                document.querySelectorAll('[id^="method-body-"]').forEach(el => el.style.display = 'block');
+                
+                if (editDiv && bodyDiv && textarea) {
+                    bodyDiv.style.display = 'none';
+                    editDiv.style.display = 'block';
+                    
+                    // If textarea is empty, set default template based on param count
+                    if (!textarea.value.trim()) {
+                        if (paramCount === 0) {
+                            textarea.value = 'return "Mock result"';
+                        } else if (paramCount === 1) {
+                            textarea.value = 'return args[0] + " processed"';
+                        } else {
+                            textarea.value = 'return args[0] + "-" + args[1]';
+                        }
+                    }
+                    textarea.focus();
+                }
+            };
+            
+            window.editMethod = function(objectName, methodName, paramCount, currentImpl, methodId) {
+                document.querySelectorAll('[id^=\"method-edit-\"]').forEach(el => el.style.display = 'none');
+                document.querySelectorAll('[id^=\"method-body-\"]').forEach(el => el.style.display = 'block');
+                
+                const editDiv = document.getElementById('method-edit-' + methodId);
+                const bodyDiv = document.getElementById('method-body-' + methodId);
+                const textarea = document.getElementById('method-input-' + methodId);
+                
+                if (editDiv && bodyDiv && textarea) {
+                    bodyDiv.style.display = 'none';
+                    editDiv.style.display = 'block';
+                    
+                    const decodedImpl = currentImpl.replace(/&#10;/g, '\\n');
+                    if (!decodedImpl) {
+                        if (paramCount === 0) {
+                            textarea.value = 'return \"Mock result\"';
+                        } else if (paramCount === 1) {
+                            textarea.value = 'return args[0] + \" processed\"';
+                        } else {
+                            textarea.value = 'return args[0] + \"-\" + args[1]';
+                        }
+                    } else {
+                        textarea.value = decodedImpl;
+                    }
+                    textarea.focus();
+                }
+            };
+            
+            window.saveMethod = function(objectName, methodName, methodId) {
+                const textarea = document.getElementById('method-input-' + methodId);
+                if (!textarea) return;
+                
+                const implementation = textarea.value.trim();
+                if (!implementation) {
+                    alert('Please enter an implementation');
+                    return;
+                }
+                
+                vscode.postMessage({
+                    command: 'saveMethod',
+                    objectName: objectName,
+                    methodName: methodName,
+                    implementation: implementation
+                });
+            };
+            
+            window.cancelEditMethod = function(methodId) {
+                const editDiv = document.getElementById('method-edit-' + methodId);
+                const bodyDiv = document.getElementById('method-body-' + methodId);
+                if (editDiv && bodyDiv) {
+                    editDiv.style.display = 'none';
+                    bodyDiv.style.display = 'block';
+                }
+            };
+            
+            // Delete functions
+            window.configureVariable = function(name, inferredType) {
+                window.editVariable(name, inferredType, '');
+            };
+        
+            window.configureProperty = function(objectName, propertyName, inferredType) {
+                const propId = (objectName + '-' + propertyName).replace(/[^a-zA-Z0-9]/g, '_');
+                window.editProperty(objectName, propertyName, inferredType, '', propId);
+            };
+        
+            window.configureMethod = function(objectName, methodName, paramCount) {
+                const methodId = (objectName + '-' + methodName).replace(/[^a-zA-Z0-9]/g, '_');
+                window.editMethod(objectName, methodName, paramCount, '', methodId);
+            };
+        
+            window.deleteVariable = function(name) {
+                vscode.postMessage({
+                    command: 'requestDeleteConfirm',
+                    type: 'variable',
+                    name: name,
+                    message: 'Delete $' + name + '?'
+                });
+            };
+        
+            window.deleteProperty = function(objectName, propertyName) {
+                vscode.postMessage({
+                    command: 'requestDeleteConfirm',
+                    type: 'property',
+                    objectName: objectName,
+                    propertyName: propertyName,
+                    message: 'Delete $' + objectName + '.' + propertyName + '?'
+                });
+            };
+        
+            window.deleteMethod = function(objectName, methodName) {
+                vscode.postMessage({
+                    command: 'requestDeleteConfirm',
+                    type: 'method',
+                    objectName: objectName,
+                    methodName: methodName,
+                    message: 'Delete $' + objectName + '.' + methodName + '()?'
+                });
+            };
+        })();
+    </script>
+</body>
+</html>`;
+
+        console.log('=== HTML GENERATION COMPLETE ===');
+        console.log('Generated HTML length:', html.length);
+        console.log('HTML contains script tag:', html.includes('<script>'));
+        console.log('HTML contains body tag:', html.includes('<body>'));
+        
+        return html;
+        console.log('HTML contains testClick:', html.includes('testClick'));
+        
+        // Log first 500 chars of script section
+        const scriptStart = html.indexOf('<script>');
+        if (scriptStart > 0) {
+            console.log('Script section starts:', html.substring(scriptStart, scriptStart + 500));
+        }
+        
+        return html;
+    }
+
+    private renderContextItem(item: ContextItem, contextData: ContextData, isConfigured: boolean): string {
+        const data = contextData[item.name];
+        
+        if (item.type === 'variable') {
+            const typeLabel = item.inferredType ? ` (${item.inferredType})` : '';
+            return `
+                <div class="context-item" data-var-name="${this.escapeHtml(item.name)}" data-var-type="${item.inferredType || 'string'}">
+                    <div class="item-header" id="var-header-${this.escapeHtml(item.name)}">
+                        <div>
+                            <span class="item-name">$${this.escapeHtml(item.name)}</span>
+                            <span class="item-type">variable${typeLabel}</span>
+                        </div>
+                        <div>
+                            ${isConfigured ? `
+                                <button class="secondary" onclick="editVariableByName('${this.escapeJs(item.name)}')">✏️ Edit</button>
+                                <button class="secondary" onclick="deleteVariable('${this.escapeJs(item.name)}')">🗑️</button>
+                            ` : `
+                                <button onclick="editVariableByName('${this.escapeJs(item.name)}')">⚙️ Configure</button>
+                            `}
+                        </div>
+                    </div>
+                    <div class="item-body" id="var-body-${this.escapeHtml(item.name)}">
+                        ${isConfigured ? `
+                            <div class="nested-value">${this.escapeHtml(JSON.stringify(data, null, 2))}</div>
+                        ` : `
+                            <div class="context-line">Line ${item.lineNumber}: ${this.escapeHtml(item.context)}</div>
+                        `}
+                    </div>
+                    <div class="item-edit" id="var-edit-${this.escapeHtml(item.name)}" style="display: none; padding: 15px; background: var(--vscode-input-background); border-top: 1px solid var(--vscode-panel-border);">
+                        <div style="margin-bottom: 10px;">
+                            <label><strong>Edit: $${this.escapeHtml(item.name)}</strong> (${item.inferredType || 'string'})</label>
+                        </div>
+                        <div style="margin-bottom: 10px;">
+                            <textarea id="var-input-${this.escapeHtml(item.name)}" style="width: 100%; min-height: 80px; font-family: 'Consolas', monospace; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); padding: 6px; border-radius: 2px;">${isConfigured ? this.escapeHtml(JSON.stringify(data, null, 2)) : ''}</textarea>
+                            <div style="font-size: 0.85em; color: var(--vscode-descriptionForeground); margin-top: 4px;">Enter JSON value: "text", 123, true, {"key": "value"}, etc.</div>
+                        </div>
+                        <button onclick="saveVariable('${this.escapeJs(item.name)}', '${item.inferredType || 'string'}')" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 6px 14px; cursor: pointer; border-radius: 2px; margin-right: 8px;">💾 Save</button>
+                        <button onclick="cancelEditVariable('${this.escapeJs(item.name)}')" style="background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; padding: 6px 14px; cursor: pointer; border-radius: 2px;">✖ Cancel</button>
+                    </div>
+                </div>
+            `;
+        } else {
+            // Object with properties and/or methods
+            const properties = Array.from(item.properties?.entries() || []);
+            const methods = Array.from(item.methods?.entries() || []);
+            
+            return `
+                <div class="context-item">
+                    <div class="item-header">
+                        <div>
+                            <span class="item-name">$${this.escapeHtml(item.name)}</span>
+                            <span class="item-type">object</span>
+                            <span class="item-meta">
+                                ${properties.length} prop(s), ${methods.length} method(s)
+                            </span>
+                        </div>
+                        ${isConfigured ? `
+                            <button class="secondary" onclick="deleteVariable('${this.escapeJs(item.name)}')">🗑️ Delete All</button>
+                        ` : ''}
+                    </div>
+                    <div class="item-body">
+                        ${properties.length > 0 ? `
+                            ${properties.map(([propName, propData]) => {
+                                const hasValue = data && data[propName] !== undefined;
+                                const propType = propData.inferredType || 'string';
+                                const typeLabel = propData.inferredType ? ` (${propData.inferredType})` : '';
+                                const propId = `${item.name}-${propName}`.replace(/[^a-zA-Z0-9]/g, '_');
+                                const escapedPropValue = hasValue ? this.escapeHtml(JSON.stringify(data[propName])).replace(/\n/g, '&#10;') : '';
+                                return `
+                                    <div class="nested-item">
+                                        <div class="nested-header" id="prop-header-${propId}">
+                                            <span class="nested-name">.${this.escapeHtml(propName)}${typeLabel}</span>
+                                            ${hasValue ? `
+                                                <div>
+                                                    <button class="secondary" onclick="editProperty('${this.escapeJs(item.name)}', '${this.escapeJs(propName)}', '${propType}', '${escapedPropValue}', '${propId}')">✏️</button>
+                                                    <button class="secondary" onclick="deleteProperty('${this.escapeJs(item.name)}', '${this.escapeJs(propName)}')">🗑️</button>
+                                                </div>
+                                            ` : `
+                                                <button onclick="editProperty('${this.escapeJs(item.name)}', '${this.escapeJs(propName)}', '${propType}', '', '${propId}')">⚙️ Set Value</button>
+                                            `}
+                                        </div>
+                                        <div id="prop-body-${propId}">
+                                            ${hasValue ? `
+                                                <div class="nested-value">${this.escapeHtml(JSON.stringify(data[propName]))}</div>
+                                            ` : `
+                                                <div class="context-line">Line ${propData.lineNumber}: ${this.escapeHtml(propData.context)}</div>
+                                            `}
+                                        </div>
+                                        <div id="prop-edit-${propId}" style="display: none; margin-top: 8px; padding: 10px; background: var(--vscode-textCodeBlock-background); border-radius: 4px;">
+                                            <div style="margin-bottom: 8px;">
+                                                <label><strong>.${this.escapeHtml(propName)}</strong> (${propType})</label>
+                                            </div>
+                                            <input type="text" id="prop-input-${propId}" value="${hasValue ? this.escapeHtml(JSON.stringify(data[propName])) : ''}" style="width: 100%; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); padding: 6px; font-family: 'Consolas', monospace; border-radius: 2px;" />
+                                            <div style="margin-top: 8px;">
+                                                <button onclick="saveProperty('${this.escapeJs(item.name)}', '${this.escapeJs(propName)}', '${propType}', '${propId}')" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 4px 10px; cursor: pointer; border-radius: 2px; font-size: 0.85em; margin-right: 6px;">💾 Save</button>
+                                                <button onclick="cancelEditProperty('${propId}')" style="background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; padding: 4px 10px; cursor: pointer; border-radius: 2px; font-size: 0.85em;">✖ Cancel</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        ` : ''}
+                        
+                        ${methods.length > 0 ? `
+                            ${methods.map(([methodName, methodData]) => {
+                                const hasImpl = data && data[methodName] && data[methodName]._implementation;
+                                const methodId = `${item.name}-${methodName}`.replace(/[^a-zA-Z0-9]/g, '_');
+                                return `
+                                    <div class="nested-item">
+                                        <div class="nested-header" id="method-header-${methodId}">
+                                            <span class="method-name">.${this.escapeHtml(methodName)}(${methodData.paramCount} param${methodData.paramCount !== 1 ? 's' : ''})</span>
+                                            ${hasImpl ? `
+                                                <div>
+                                                    <button class="secondary" onclick="editMethodByName('${this.escapeJs(item.name)}', '${this.escapeJs(methodName)}', ${methodData.paramCount})">✏️</button>
+                                                    <button class="secondary" onclick="deleteMethod('${this.escapeJs(item.name)}', '${this.escapeJs(methodName)}')">🗑️</button>
+                                                </div>
+                                            ` : `
+                                                <button onclick="editMethodByName('${this.escapeJs(item.name)}', '${this.escapeJs(methodName)}', ${methodData.paramCount})">⚙️ Implement</button>
+                                            `}
+                                        </div>
+                                        <div id="method-body-${methodId}">
+                                            ${hasImpl ? `
+                                                <div class="nested-value">${this.escapeHtml(data[methodName]._implementation)}</div>
+                                            ` : `
+                                                <div class="context-line">Line ${methodData.lineNumber}: ${this.escapeHtml(methodData.context)}</div>
+                                            `}
+                                        </div>
+                                        <div id="method-edit-${methodId}" style="display: none; margin-top: 8px; padding: 10px; background: var(--vscode-textCodeBlock-background); border-radius: 4px;">
+                                            <div style="margin-bottom: 8px;">
+                                                <label><strong>.${this.escapeHtml(methodName)}()</strong> - ${methodData.paramCount} parameter(s)</label>
+                                            </div>
+                                            <textarea id="method-input-${methodId}" style="width: 100%; min-height: 100px; font-family: 'Consolas', monospace; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); padding: 6px; border-radius: 2px;">${hasImpl ? this.escapeHtml(data[methodName]._implementation) : ''}</textarea>
+                                            <div style="font-size: 0.85em; color: var(--vscode-descriptionForeground); margin-top: 4px;">Parameters available in args array. Use utils.loadProperties() for property files.</div>
+                                            <div style="margin-top: 8px;">
+                                                <button onclick="saveMethod('${this.escapeJs(item.name)}', '${this.escapeJs(methodName)}', '${methodId}')" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 4px 10px; cursor: pointer; border-radius: 2px; font-size: 0.85em; margin-right: 6px;">💾 Save</button>
+                                                <button onclick="cancelEditMethod('${methodId}')" style="background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; padding: 4px 10px; cursor: pointer; border-radius: 2px; font-size: 0.85em;">✖ Cancel</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+    }
+
+    private escapeHtml(text: string): string {
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    private escapeJs(text: string): string {
+        // For use in HTML onclick attributes - use HTML entities instead of backslash escapes
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/'/g, '&apos;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\n/g, ' ')
+            .replace(/\r/g, '');
+    }
+
+    getContextForTemplate(templatePath: string): ContextData {
+        const contextFilePath = this.getContextFilePath(templatePath);
+        
+        if (this.contextCache.has(contextFilePath)) {
+            return this.contextCache.get(contextFilePath)!;
+        }
+
+        if (fs.existsSync(contextFilePath)) {
+            try {
+                const content = fs.readFileSync(contextFilePath, 'utf8');
+                const contextData = JSON.parse(content);
+                this.contextCache.set(contextFilePath, contextData);
+                return contextData;
+            } catch (e) {
+                console.error('Error reading context file:', e);
+            }
+        }
+
+        return {};
+    }
+
+    private async saveContext(templatePath: string, contextData: ContextData): Promise<void> {
+        const contextFilePath = this.getContextFilePath(templatePath);
+        
+        try {
+            const content = JSON.stringify(contextData, null, 2);
+            fs.writeFileSync(contextFilePath, content, 'utf8');
+            this.contextCache.set(contextFilePath, contextData);
+        } catch (e) {
+            vscode.window.showErrorMessage(`Failed to save context: ${e}`);
+        }
+    }
+
+    private getContextFilePath(templatePath: string): string {
+        const dir = path.dirname(templatePath);
+        const base = path.basename(templatePath);
+        return path.join(dir, `${base}.context.json`);
+    }
+
+    private getNonce(): string {
+        let text = '';
+        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        for (let i = 0; i < 32; i++) {
+            text += possible.charAt(Math.floor(Math.random() * possible.length));
+        }
+        return text;
+    }
+}

@@ -1,0 +1,178 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Velocity",
+  "scopeName": "text.html.velocity",
+  "patterns": [
+    { "include": "#velocity-comments" },
+    { "include": "#velocity-directives" },
+    { "include": "#velocity-references" },
+    { "include": "text.html.basic" }
+  ],
+  "repository": {
+    "velocity-comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-number-sign.velocity",
+          "match": "##.*$"
+        },
+        {
+          "name": "comment.block.velocity",
+          "begin": "#\\*",
+          "end": "\\*#"
+        }
+      ]
+    },
+    "velocity-directives": {
+      "patterns": [
+        {
+          "name": "keyword.control.directive.velocity",
+          "match": "#\\b(end|else)\\b"
+        },
+        {
+          "name": "meta.directive.foreach.velocity",
+          "begin": "(#foreach)\\s*\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.directive.velocity" }
+          },
+          "patterns": [
+            { "include": "#velocity-references" },
+            {
+              "match": "\\bin\\b",
+              "name": "keyword.operator.velocity"
+            }
+          ]
+        },
+        {
+          "name": "meta.directive.set.velocity",
+          "begin": "(#set)\\s*\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.directive.velocity" }
+          },
+          "patterns": [
+            { "include": "#velocity-references" },
+            { "include": "#velocity-strings" },
+            { "include": "#velocity-operators" }
+          ]
+        },
+        {
+          "name": "meta.directive.condition.velocity",
+          "begin": "(#(?:if|elseif))\\s*\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.directive.velocity" }
+          },
+          "patterns": [
+            { "include": "#velocity-references" },
+            { "include": "#velocity-strings" },
+            { "include": "#velocity-operators" },
+            { "include": "#velocity-numbers" },
+            { "include": "#velocity-booleans" }
+          ]
+        },
+        {
+          "name": "meta.directive.other.velocity",
+          "begin": "(#(?:include|parse|macro|define|evaluate|break|stop))\\s*\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.directive.velocity" }
+          },
+          "patterns": [
+            { "include": "#velocity-references" },
+            { "include": "#velocity-strings" }
+          ]
+        }
+      ]
+    },
+    "velocity-references": {
+      "patterns": [
+        {
+          "name": "meta.reference.method.velocity",
+          "match": "(\\$!?)(\\{?)([a-zA-Z_][a-zA-Z0-9_]*(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)*)\\.(\\w+)(\\()(.*?)(\\))(\\}?)",
+          "captures": {
+            "1": { "name": "punctuation.definition.variable.velocity" },
+            "2": { "name": "punctuation.definition.variable.begin.velocity" },
+            "3": { "name": "variable.other.readwrite.velocity" },
+            "4": { "name": "entity.name.function.member.velocity" },
+            "5": { "name": "punctuation.definition.parameters.begin.velocity" },
+            "6": { "patterns": [{ "include": "#velocity-references" }, { "include": "#velocity-strings" }] },
+            "7": { "name": "punctuation.definition.parameters.end.velocity" },
+            "8": { "name": "punctuation.definition.variable.end.velocity" }
+          }
+        },
+        {
+          "name": "meta.reference.property.velocity",
+          "match": "(\\$!?)(\\{?)([a-zA-Z_][a-zA-Z0-9_]*)(?:(\\.)([a-zA-Z_][a-zA-Z0-9_]*))*+(?!\\()(\\}?)",
+          "captures": {
+            "1": { "name": "punctuation.definition.variable.velocity" },
+            "2": { "name": "punctuation.definition.variable.begin.velocity" },
+            "3": { "name": "variable.other.readwrite.velocity" },
+            "4": { "name": "punctuation.accessor.velocity" },
+            "5": { "name": "variable.other.property.velocity" },
+            "6": { "name": "punctuation.definition.variable.end.velocity" }
+          }
+        }
+      ]
+    },
+    "velocity-strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.velocity",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "include": "#velocity-references" },
+            {
+              "name": "constant.character.escape.velocity",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.velocity",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.velocity",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "velocity-numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.velocity",
+          "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+        }
+      ]
+    },
+    "velocity-booleans": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.velocity",
+          "match": "\\b(true|false|null)\\b"
+        }
+      ]
+    },
+    "velocity-operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.logical.velocity",
+          "match": "\\b(and|or|not)\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.velocity",
+          "match": "(==|!=|<|>|<=|>=)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.velocity",
+          "match": "(\\+|-|\\*|/|%)"
+        }
+      ]
+    }
+  }
+}
