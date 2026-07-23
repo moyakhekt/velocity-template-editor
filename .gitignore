@@ -3,3 +3,10 @@ node_modules
 .vscode-test/
 *.vsix
 .DS_Store
+server/target/
+*.class
+*.log
+*.backup
+*.backup2
+*.backup-*
+*.git-head.ts

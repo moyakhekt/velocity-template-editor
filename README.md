@@ -1,3 +1,25 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/user/repo/main/logo.svg" alt="Velocity Template Editor Logo" width="120" height="120">
+</p>
+
+<p align="center">
+  <svg width="120" height="120" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" style="stop-color:#FF6B35;stop-opacity:1" />
+        <stop offset="50%" style="stop-color:#F7931E;stop-opacity:1" />
+        <stop offset="100%" style="stop-color:#FDC830;stop-opacity:1" />
+      </linearGradient>
+    </defs>
+    <circle cx="50" cy="50" r="48" fill="url(#logo-gradient)" stroke="#FF6B35" stroke-width="2"/>
+    <path d="M 30 25 L 50 65 L 45 65 L 25 25 Z" fill="white" />
+    <path d="M 50 25 L 70 65 L 65 65 L 45 25 Z" fill="white" />
+    <path d="M 70 25 L 75 25 L 55 65 L 50 65 Z" fill="white" />
+    <path d="M 35 70 L 65 70 L 63 75 L 37 75 Z" fill="white" opacity="0.8"/>
+    <path d="M 40 78 L 60 78 L 58 82 L 42 82 Z" fill="white" opacity="0.6"/>
+  </svg>
+</p>
+
 # Velocity Template Editor
 
 A comprehensive VS Code extension for editing and previewing Apache Velocity templates with an integrated context management system.
@@ -20,7 +42,7 @@ A comprehensive VS Code extension for editing and previewing Apache Velocity tem
 - Real-time template rendering with Apache Velocity 2.3
 - Java-based Velocity server with Nashorn JavaScript engine
 - Side-by-side preview panel
-- Automatic context merging (global + template)
+- Automatic context merging (environment + template)
 - Error highlighting with detailed messages
 - Command: `Velocity: Open Preview`
 
@@ -30,18 +52,18 @@ Unified management system for template variables, properties, and methods with d
 #### Template Context
 - Variables, properties, and methods specific to individual templates
 - Saved per-template in `.context.json` files
-- Source toggle to move items between template and global contexts
+- Source toggle to move items between template and environment contexts
 - Full editing capabilities with type support (strings, numbers, objects, arrays)
 
-#### Global Context
+#### Environment Context
 - Shared variables, properties, and methods across all templates
-- Saved in a single global JSON file (user-specified location)
+- Saved in a single environment JSON file (user-specified location)
 - Automatically merged into template context during rendering
 - Prompt-on-demand file creation (only when needed)
 
 **Features:**
-- **Dual-tab interface**: Switch between Template and Global contexts
-- **Source toggles**: Move items between template/global with one click
+- **Dual-tab interface**: Switch between Template and Environment contexts
+- **Source toggles**: Move items between template/environment with one click
 - **Smart merging**: Objects are merged when both contexts define them
 - **JavaScript methods**: Design-time implementations with `args[]` access
 - **Live updates**: Changes immediately reflected in preview
@@ -77,22 +99,22 @@ code --install-extension velocity-template-editor-0.0.1.vsix
 1. Switch to the **Template Context** tab (selected by default)
 2. All variables, properties, and methods from your template are listed
 3. For each item:
-   - Use the **Template/Global** toggle to set where it's stored
+   - Use the **Template/Environment** toggle to set where it's stored
    - When set to **Template**: Edit the value and click 💾 to save
-   - When set to **Global**: Value is read-only (edit in Global Context tab)
+   - When set to **Environment**: Value is read-only (edit in Environment Context tab)
    - Click 🗑 to delete the item
 
-#### Working with Global Context
-1. Switch to the **Global Context** tab
-2. Click 📂 **Load Global Context File** to load an existing file
-3. Click 💾 **Save Global Context File** to save to a new/existing file
-4. Edit global variables, properties, and methods
+#### Working with Environment Context
+1. Switch to the **Environment Context** tab
+2. Click 📂 **Load Environment Context File** to load an existing file
+3. Click 💾 **Save Environment Context File** to save to a new/existing file
+4. Edit environment variables, properties, and methods
 5. These values are automatically available to all templates
 
 #### Context Merging (Automatic)
 When rendering templates:
-- Global context values are loaded first
-- Template context values override/extend global values
+- Environment context values are loaded first
+- Template context values override/extend environment values
 - Objects are merged (template properties take precedence)
 - This happens automatically - no configuration needed
 
@@ -159,7 +181,7 @@ if (value > 100) {
 
 ## Example
 
-**Template:** `example.vm`
+**Template:** `docs/examples/example.vm`
 ```velocity
 ## This is a comment
 <h1>Hello, $name!</h1>
@@ -194,7 +216,7 @@ if (value > 100) {
 }
 ```
 
-**Global Context:** `global-context.json` (separate file)
+**Environment Context:** `environment-context.json` (separate file)
 ```json
 {
   "user": {
@@ -224,7 +246,7 @@ if (value > 100) {
 </ul>
 ```
 
-Note: `user` object is merged - `role` from template, `getEmail()` from global.
+Note: `user` object is merged - `role` from template, `getEmail()` from environment.
 
 ## Configuration
 
@@ -243,21 +265,21 @@ Available settings:
 ### Components
 - **Extension Host** (TypeScript): VS Code extension activation and command registration
 - **Velocity Server** (Java): Apache Velocity 2.3 with Nashorn JavaScript engine for method mocks
-- **Context Manager** (TypeScript + Webview): Unified UI for managing template and global contexts
+- **Context Manager** (TypeScript + Webview): Unified UI for managing template and environment contexts
 - **Preview Provider** (TypeScript + Webview): Real-time template rendering with merged context
 
 ### File Structure
 ```
 template.vm                 # Your Velocity template
 template.context.json       # Template-specific context (optional)
-global-context.json         # Shared global context (user-specified location)
+environment-context.json         # Shared environment context (user-specified location)
 ```
 
 ### Context Resolution
-1. Global context loaded from user-specified file
+1. Environment context loaded from user-specified file
 2. Template context loaded from `.context.json` file
-3. Contexts merged: `merged = {...global, ...template}`
-4. Objects with same key are merged: `merged.obj = {...global.obj, ...template.obj}`
+3. Contexts merged: `merged = {...environment, ...template}`
+4. Objects with same key are merged: `merged.obj = {...environment.obj, ...template.obj}`
 5. Merged context passed to Velocity renderer
 
 ## Supported Velocity Features
@@ -313,7 +335,7 @@ vsce package
 - Macro definitions (`#macro`) are parsed but not fully executed in preview
 - Some complex Velocity expressions may not evaluate correctly
 - Method mocks require JavaScript syntax (Nashorn engine)
-- Global context requires manual file path selection on first use
+- Environment context requires manual file path selection on first use
 
 ## Troubleshooting
 
@@ -331,7 +353,7 @@ vsce package
 - Check that variable names match template exactly (case-sensitive)
 - Try clearing cache: Close and reopen the preview
 
-**Global context not loading:**
+**Environment context not loading:**
 - Ensure file path is accessible
 - Verify JSON syntax is valid
 - Check file permissions
@@ -355,7 +377,7 @@ MIT
 - ✅ Live preview with Apache Velocity 2.3 server
 - ✅ Unified Context Manager with dual-context support
 - ✅ Template-specific context (`.context.json` files)
-- ✅ Global shared context (user-specified JSON file)
+- ✅ Environment shared context (user-specified JSON file)
 - ✅ Automatic context merging for rendering
 - ✅ Source toggles to move items between contexts
 - ✅ JavaScript-based method implementations (Nashorn)
@@ -368,6 +390,15 @@ If upgrading from a version that used `.vars.json` and `.mocks.json`:
 - Variables and mocks are now unified in `.context.json` files
 - Old files are not automatically migrated
 - Manual migration: Copy variables and format methods with `_implementation` key
+
+## Documentation
+
+For detailed guides and reference documentation:
+
+- **[Quick Start Guide](docs/QUICKSTART.md)** - Get started quickly with step-by-step instructions
+- **[Documentation Index](docs/DOCUMENTATION.md)** - Complete documentation overview
+- **[Examples](docs/examples/)** - Sample templates and test scripts
+- **[Architecture Guide](.github/copilot-instructions.md)** - Technical implementation details
 
 ## Support
 

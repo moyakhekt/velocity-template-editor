@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src {{cspSource}} 'nonce-{{nonce}}'; font-src {{cspSource}}; script-src 'nonce-{{nonce}}';">
+    <link rel="stylesheet" href="{{codiconUri}}">
+    {{styles}}
+</head>
+<body>
+    <div class="tabs">
+        <div class="tab" data-tab="environment">Environment Context</div>
+        <div class="tab active" data-tab="template">Template Context</div>
+    </div>
+    
+    <div id="template-tab" class="tab-content active">
+        {{templateTabContent}}
+    </div>
+    
+    <div id="environment-tab" class="tab-content">
+        <div class="config-section">
+            <div class="label-with-info">
+                <label for="environment-context-file-path" class="section-label">Environment Context File</label>
+                <button class="codicon codicon-info info-icon" title="This file contains variables and methods shared across all templates"></button>
+            </div>
+            <div class="form-field">
+                <div class="button-group">
+                    <input type="text" id="environment-context-file-path" value="{{environmentFilePath}}" 
+                           placeholder="No file loaded" readonly />
+                    <button class="codicon codicon-folder-opened browse-button" data-action="loadEnvironmentContext" title="Load Environment Context File"></button>
+                    <button class="codicon codicon-refresh browse-button" data-action="reloadEnvironmentContext" title="Reload Environment Context File"></button>
+                </div>
+            </div>
+        </div>
+        {{environmentTabContent}}
+    </div>
+    
+    {{scripts}}
+</body>
+</html>

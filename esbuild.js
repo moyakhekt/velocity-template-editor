@@ -1,12 +1,33 @@
 const esbuild = require('esbuild');
 const { watch } = require('fs');
+const fs = require('fs-extra');
+const path = require('path');
 
 const production = process.argv.includes('--production');
 const watchMode = process.argv.includes('--watch');
 
+// Plugin to copy template files
+const copyTemplatesPlugin = {
+  name: 'copy-templates',
+  setup(build) {
+    build.onEnd(async () => {
+      const srcTemplates = path.join(__dirname, 'webview-ui');
+      const outTemplates = path.join(__dirname, 'out', 'webview-ui');
+      
+      try {
+        await fs.ensureDir(outTemplates);
+        await fs.copy(srcTemplates, outTemplates, { overwrite: true });
+        console.log('[copy] webview-ui copied');
+      } catch (err) {
+        console.error('[copy] failed to copy webview-ui:', err);
+      }
+    });
+  }
+};
+
 async function main() {
   const ctx = await esbuild.context({
-    entryPoints: ['src/extension.ts'],
+    entryPoints: ['extension/extension.ts'],
     bundle: true,
     format: 'cjs',
     minify: production,
@@ -14,9 +35,10 @@ async function main() {
     sourcesContent: false,
     platform: 'node',
     outfile: 'out/extension.js',
-    external: ['vscode'],
+    external: ['vscode', 'playwright-core'],
     logLevel: 'silent',
     plugins: [
+      copyTemplatesPlugin,
       {
         name: 'watch-plugin',
         setup(build) {

@@ -4,6 +4,7 @@
   "description": "Apache Velocity template editor with syntax highlighting, live preview, variable management, and method mocks",
   "version": "0.0.1",
   "publisher": "velocity-editor",
+  "icon": "logo.png",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -50,12 +51,25 @@
       {
         "command": "velocity.manageContext",
         "title": "Manage Context (Variables & Objects)",
-        "category": "Velocity"
+        "category": "Velocity",
+        "icon": "$(symbol-variable)"
       },
       {
         "command": "velocity.detectInHtml",
         "title": "Detect Velocity Syntax",
         "category": "Velocity"
+      },
+      {
+        "command": "velocity.runScreenshots",
+        "title": "Run Screenshot Tests",
+        "category": "Velocity",
+        "icon": "$(device-camera)"
+      },
+      {
+        "command": "velocity.openDevTools",
+        "title": "Open Developer Tools",
+        "category": "Velocity",
+        "icon": "$(tools)"
       }
     ],
     "menus": {
@@ -63,6 +77,21 @@
         {
           "command": "velocity.preview",
           "when": "resourceLangId == velocity",
+          "group": "navigation"
+        },
+        {
+          "command": "velocity.manageContext",
+          "when": "resourceLangId == velocity",
+          "group": "navigation"
+        },
+        {
+          "command": "velocity.runScreenshots",
+          "when": "activeWebviewPanelId == 'velocityContext'",
+          "group": "navigation"
+        },
+        {
+          "command": "velocity.openDevTools",
+          "when": "activeWebviewPanelId == 'velocityContext'",
           "group": "navigation"
         }
       ],
@@ -96,19 +125,31 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run build:all",
     "compile": "node ./esbuild.js",
     "watch": "node ./esbuild.js --watch",
+    "test": "jest",
     "pretest": "npm run compile",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint extension --ext ts",
+    "build:java": "cd server && mvn clean package -DskipTests",
+    "build:all": "npm run compile && npm run build:java",
+    "clean": "rimraf out && cd server && mvn clean"
   },
   "devDependencies": {
+    "@types/jest": "^29.5.14",
     "@types/node": "^20.x",
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.x",
     "@typescript-eslint/parser": "^6.x",
+    "@vscode/codicons": "^0.0.44",
     "esbuild": "^0.19.x",
     "eslint": "^8.x",
+    "fs-extra": "^11.3.3",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.6",
     "typescript": "^5.3.x"
+  },
+  "dependencies": {
+    "playwright-core": "^1.49.0"
   }
 }

@@ -1,0 +1,86 @@
+## CODE QUALITY TODO — Ordered by Priority
+### (Generated from audit — March 2026)
+
+---
+
+## 🔴 CRITICAL
+
+### 1. Strip 193 console.log/warn statements from all extension host files
+**Prompt:** "Remove all console.log, console.warn, and console.error statements from the following extension host files: contextManager.ts (169 occurrences), preview.ts (11), velocityServerClient.ts (6), templateParser.ts (4), contextState.ts (2), and extension.ts (1). These run on the Node.js extension host thread and expose internal state in production. Do not remove console calls from inside server/ Java code. After removing, verify the build passes with 0 errors."
+
+### 2. Convert synchronous file I/O to async in contextManager.ts
+**Prompt:** "Replace all fs.readFileSync and fs.writeFileSync calls in extension/contextManager.ts with async equivalents using fs.promises.readFile and fs.promises.writeFile. There are approximately 20 affected call sites (lines 170, 218, 307, 499, 609, 950, 1006, 1158, 1803, 1914, 2355, 2431, 2452, 2480, 2508, 2527, 2546, 4146, 4208, 4237, 4271). Update the enclosing method signatures to be async where they are not already. Verify 0 TypeScript errors after the change."
+
+### 3. Convert synchronous file I/O to async in contextState.ts and preview.ts
+**Prompt:** "Replace all fs.readFileSync and fs.writeFileSync calls in extension/contextState.ts (lines 33, 64, 190, 213) and extension/preview.ts (lines 58, 62, 109, 110, 495, 498) with async fs.promises equivalents. Update enclosing methods to be async. Ensure callers are updated to await the results. Verify 0 TypeScript errors."
+
+---
+
+## 🟠 HIGH
+
+### 4. Fix missing null guard on previewProvider.refresh
+**Prompt:** "In extension/contextManager.ts around line 329, the code checks this.previewProvider?.previewFilePath (using optional chaining) on line 321 but then calls this.previewProvider.refresh(doc) directly on line 329 without an optional chain. Change this.previewProvider.refresh(doc) to this.previewProvider?.refresh(doc) to make it consistent and prevent a potential null dereference."
+
+### 5. Replace boolean+timeout watcher suppression with counter-based suppression
+**Prompt:** "In extension/contextManager.ts, find the suppressFileWatcherRefresh boolean flag and its associated 100ms setTimeout. Replace the boolean with a numeric counter (suppressFileWatcherDepth: number = 0). When suppression begins, increment the counter; in a finally block, decrement it. In the watcher callback, skip processing only when the counter is greater than 0. This prevents timing-based race conditions where the 100ms window expires before the OS delivers the file change event."
+
+### 6. Route silent catch-block errors to the OutputChannel instead of swallowing them
+**Prompt:** "In extension/contextManager.ts, find all catch blocks that only call console.warn(...) or silently swallow errors (empty catch). Replace them with calls to this.outputChannel.appendLine() to surface the error message to the user-visible Output panel. The outputChannel is already available as a class field. This applies especially to errors during context file loading, environment file loading, and JSON parse failures."
+
+### 7. Add input validation layer for webview postMessage messages
+**Prompt:** "In extension/contextManager.ts, the onDidReceiveMessage handler receives messages typed as any. The file extension/messageTypes.ts already defines all expected message shapes. Add a type guard function (e.g., isValidWebviewMessage) that validates the command field is a non-empty string before dispatching. Reject and log unexpected shapes via the outputChannel. Update the handler parameter from any to unknown and narrow it with the type guard."
+
+---
+
+## 🟡 MEDIUM
+
+### 8. Replace server-generated HTML blobs in postMessage with structured data
+**Prompt:** "In the updateScenarioDOM flow, extension/contextManager.ts sends headersHtml and variablesHtml as raw HTML strings via postMessage, which are then injected via innerHTML in webview-ui/scripts.js (lines 1350, 1356). Refactor this: instead of sending pre-built HTML, send structured data arrays (e.g., headers: [{name, value, source}[]]). Move the HTML generation into scripts.js so the webview owns its own DOM construction. This eliminates the pattern of trusting HTML strings received over postMessage. Also migrate urlSourceOptions (line 1338) in the same pass."
+
+### 9. Break up methods longer than 100 lines in contextManager.ts
+**Prompt:** "Identify and refactor the three longest methods in extension/contextManager.ts: manageContext, generateHtml (or the main webview HTML builder), and handleWebviewMessage (or the onDidReceiveMessage dispatcher). Extract logical sub-sections into private helper methods with descriptive names. Each helper should do one thing. Target: no method body longer than 80 lines. Do not change observable behavior — only restructure."
+
+### 10. Split ContextManager into focused classes (major refactor)
+**Prompt:** "extension/contextManager.ts is 5,678 lines and handles too many responsibilities. Split it into the following classes, each in its own file under extension/: (1) ScenarioManager — scenario CRUD, switching, variable resolution and inheritance; (2) EnvironmentContextManager — environment file load/save, CSP directives, template mappings; (3) WebviewHtmlRenderer — all methods that return HTML strings for the webview; (4) WebviewMessageHandler — the onDidReceiveMessage dispatcher and all handle* methods. Keep ContextManager as a thin orchestrator that constructs and coordinates these classes. Update extension.ts to use the new structure. Verify 0 TypeScript errors and that the extension still functions."
+
+---
+
+## 🔵 LOW
+
+### 11. Replace puppeteer with playwright-core using the user's installed browser
+**Status:** ✅ COMPLETED
+**Prompt:** "In extension/screenshotRunner.ts, replace the puppeteer dependency with playwright-core. Puppeteer v24 downloads a full Chromium binary (~200 MB on install). playwright-core carries no bundled browser — it drives the user's already-installed Google Chrome or Microsoft Edge instead. Changes required: (1) In package.json, replace 'puppeteer' in dependencies with 'playwright-core' at the latest stable version. (2) In screenshotRunner.ts, replace the require('puppeteer') + puppeteer.launch() block with a dynamic import of playwright-core's chromium object and attempt channels in order ['chrome', 'msedge'], throwing a clear user-facing error if neither is installed. (3) Replace page.setViewport() with page.setViewportSize() (playwright API difference). (4) Replace waitUntil: 'networkidle0' with waitUntil: 'networkidle' (playwright uses 'networkidle' not 'networkidle0'). (5) Run npm install to update the lockfile and verify npx tsc --noEmit reports 0 errors."
+
+### 12. Add unit tests for core logic
+**Prompt:** "Add a test suite using the @vscode/test-electron or vitest framework. Write unit tests for the following critical paths that have no current coverage: (1) scenario variable inheritance/resolution (getScenarioVariables); (2) context merging (getContextForTemplate); (3) the file watcher suppression counter (once issue #5 is fixed); (4) the webview message validator (once issue #7 is fixed). Place test files in a new extension/test/ directory. Add a test script to package.json."
+
+### 13. Set skipLibCheck: false in tsconfig.json
+**Prompt:** "In tsconfig.json, change skipLibCheck from true to false. This enables TypeScript to type-check declarations inside node_modules/@types, catching issues that would otherwise be silently ignored. Run npx tsc --noEmit and fix any newly surfaced errors. If a specific third-party library produces unfixable errors, add it to the exclude list with a comment explaining why."
+
+---
+
+✅ COMPLETED: Environment CSP Header feature
+
+In the environment context, added a table: Environment CSP Header that is used to build a CSP header for previewing the template. The browser now respects this header.
+
+## Implementation Details:
+- Added CSP directives table in Environment Context tab
+- User can add/edit/delete CSP directives (e.g., default-src, script-src, style-src)
+- CSP meta tag automatically injected into preview HTML
+- Browser enforces CSP policies when rendering templates
+
+## Files Modified:
+- extension/types.ts - Added cspDirectives field
+- extension/contextManager.ts - Added CSP management UI and handlers
+- extension/preview.ts - Added CSP meta tag generation
+- webview-ui/scripts.js - Added CSP UI interactions
+- extension/velocityServerClient.ts - Fixed JAR path (velocity-server → server)
+
+## Documentation:
+- CSP-FEATURE-GUIDE.md - User guide
+- CSP-IMPLEMENTATION-SUMMARY.md - Technical details
+- CSP-TESTING-CHECKLIST.md - 20 test cases
+- environment-context-example.json - Example with CSP directives
+
+## Next Steps:
+Run F5 to test the extension with CSP functionality.

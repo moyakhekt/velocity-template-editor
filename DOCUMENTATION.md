@@ -1,3 +1,21 @@
+<p align="center">
+  <svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="doc-logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" style="stop-color:#FF6B35;stop-opacity:1" />
+        <stop offset="50%" style="stop-color:#F7931E;stop-opacity:1" />
+        <stop offset="100%" style="stop-color:#FDC830;stop-opacity:1" />
+      </linearGradient>
+    </defs>
+    <circle cx="50" cy="50" r="48" fill="url(#doc-logo-gradient)" stroke="#FF6B35" stroke-width="2"/>
+    <path d="M 30 25 L 50 65 L 45 65 L 25 25 Z" fill="white" />
+    <path d="M 50 25 L 70 65 L 65 65 L 45 25 Z" fill="white" />
+    <path d="M 70 25 L 75 25 L 55 65 L 50 65 Z" fill="white" />
+    <path d="M 35 70 L 65 70 L 63 75 L 37 75 Z" fill="white" opacity="0.8"/>
+    <path d="M 40 78 L 60 78 L 58 82 L 42 82 Z" fill="white" opacity="0.6"/>
+  </svg>
+</p>
+
 # Documentation Overview
 
 This document provides an index of all documentation for the Velocity Template Editor extension.
@@ -10,7 +28,7 @@ This document provides an index of all documentation for the Velocity Template E
 Contents:
 - Feature overview and capabilities
 - Installation instructions
-- Usage guide for Context Manager (Template & Global contexts)
+- Usage guide for Context Manager (Template & Environment contexts)
 - Variable and method examples
 - Configuration settings
 - Architecture overview
@@ -27,7 +45,7 @@ Contents:
 Contents:
 - Prerequisites (Java 8+, VS Code 1.80+)
 - Step-by-step feature walkthrough
-- Context Manager usage (Template & Global tabs)
+- Context Manager usage (Template & Environment tabs)
 - Creating custom templates
 - Variable and method examples
 - Tips and best practices
@@ -54,7 +72,7 @@ Contents:
 
 ## Additional Documentation
 
-### [velocity-server/README.md](velocity-server/README.md)
+### [server/README.md](server/README.md)
 **Apache Velocity server documentation**
 
 Contents:
@@ -80,9 +98,9 @@ The following outdated files were consolidated into the main documentation:
 ### Changes Made (January 2026)
 1. **Unified Context System**: Updated all docs to reflect single Context Manager with dual-context support
 2. **Removed Legacy References**: Eliminated mentions of separate variable/mock managers
-3. **Added Context Merging**: Documented automatic global + template context merging
+3. **Added Context Merging**: Documented automatic environment + template context merging
 4. **Updated File Formats**: Changed from `.vars.json`/`.mocks.json` to unified `.context.json`
-5. **Enhanced Examples**: Added comprehensive examples showing Template/Global context usage
+5. **Enhanced Examples**: Added comprehensive examples showing Template/Environment context usage
 6. **Improved Troubleshooting**: Added specific solutions for common issues
 7. **Architecture Details**: Added context resolution and merging documentation
 
@@ -122,7 +140,7 @@ When updating documentation:
 | Install and use the extension | README.md |
 | Test extension features quickly | QUICKSTART.md |
 | Understand architecture | copilot-instructions.md |
-| Work on the Velocity server | velocity-server/README.md |
+| Work on the Velocity server | server/README.md |
 | Configure Context Manager | README.md (Context Manager section) |
 | Debug issues | QUICKSTART.md (Troubleshooting) |
 | Contribute code | README.md (Contributing section) |

@@ -1,0 +1,17 @@
+{
+  "messagesFilePath": "",
+  "languageCode": "en",
+  "headers": {},
+  "cspDirectives": {
+    "default-src": "'self'",
+    "script-src": "'self' 'unsafe-inline'",
+    "style-src": "'self' 'unsafe-inline'",
+    "img-src": "'self' data: https:",
+    "connect-src": "'self'"
+  },
+  "data": {
+    "siteName": "My Application",
+    "version": "1.0.0"
+  },
+  "mockFunctions": {}
+}

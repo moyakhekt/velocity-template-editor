@@ -20,6 +20,31 @@
         "reveal": "never"
       },
       "group": "build"
+    },
+    {
+      "label": "Build Java Server",
+      "type": "shell",
+      "command": "mvn",
+      "args": [
+        "clean",
+        "package",
+        "-DskipTests"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/server"
+      },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "Build All",
+      "dependsOn": [
+        "npm: compile",
+        "Build Java Server"
+      ],
+      "dependsOrder": "parallel",
+      "problemMatcher": [],
+      "group": "build"
     }
   ]
 }

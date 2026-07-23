@@ -2,6 +2,15 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "type": "java",
+      "name": "Debug Java Server",
+      "request": "launch",
+      "mainClass": "com.ktmoyakhe.vscode.velocity.VelocityServer",
+      "projectName": "velocity-server",
+      "args": [],
+      "console": "integratedTerminal"
+    },
+    {
       "name": "Run Extension",
       "type": "extensionHost",
       "request": "launch",
@@ -11,7 +20,36 @@
       "outFiles": [
         "${workspaceFolder}/out/**/*.js"
       ],
-      "preLaunchTask": "npm: compile"
+      "preLaunchTask": "npm: compile",
+      "sourceMaps": true
+    },
+    {
+      "name": "Extension + Java Server",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/out/**/*.js"
+      ],
+      "preLaunchTask": "Build All",
+      "sourceMaps": true
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug Extension + Server",
+      "configurations": [
+        "Run Extension",
+        "Debug Java Server"
+      ],
+      "presentation": {
+        "hidden": false,
+        "group": "1_debug",
+        "order": 1
+      },
+      "stopAll": true
     }
   ]
 }
