@@ -1864,6 +1864,13 @@ function browseMessagesFile() {
     });
 }
 
+function deleteMessagesFile(fileIndex) {
+    vscode.postMessage({
+        command: 'deleteMessagesFile',
+        fileIndex: fileIndex
+    });
+}
+
 function saveEnvironmentHeaderRow(oldName, part, value) {
     vscode.postMessage({
         command: 'saveEnvironmentHeaderRow',
