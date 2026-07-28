@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
-import { TemplateParser, ContextItem } from "../shared/templateParser";
+import { TemplateParser, ContextItem, DetectedRequestParameter, ConditionalBlock } from "../shared/templateParser";
 import { ScenariosData, ScenarioData, EnvironmentContextConfig, MethodImpl, MethodsRecord, IPreviewProvider } from "../shared/types";
 import { IContextServices } from "./contextManagerServices";
 import { EnvironmentContextService } from "./environmentContextService";
@@ -886,6 +886,119 @@ export class ContextManager implements IContextServices {
   ): string | undefined {
     const target = name.toLowerCase();
     return Object.keys(headers).find((key) => key.toLowerCase() === target);
+  }
+
+  /**
+   * Read a template's current content, preferring an open (possibly unsaved)
+   * editor buffer over the on-disk copy. Returns undefined if the file can't
+   * be read.
+   */
+  private async readTemplateContentForAnalysis(
+    templatePath: string,
+  ): Promise<string | undefined> {
+    const openDoc = vscode.workspace.textDocuments.find(
+      (doc) =>
+        doc.uri.fsPath === templatePath ||
+        doc.uri.fsPath.toLowerCase() === templatePath.toLowerCase(),
+    );
+    if (openDoc) {
+      return openDoc.getText();
+    }
+    try {
+      return await fs.promises.readFile(templatePath, "utf8");
+    } catch (e) {
+      this.outputChannel.appendLine(
+        `[Context] Failed to read template "${templatePath}" for analysis: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * Read-only "Detected From Template" section: HTTP request parameters read via
+   * $<httpServletRequestVar>.getParameter(...)/.getParameterValues(...), and the
+   * #if/#elseif/#else decision points found in the template. Purely informational —
+   * surfaced so a developer can use it as a starting point when building scenarios
+   * by hand; nothing here is written back to the context file automatically.
+   */
+  private async generateTemplateAnalysisSection(
+    templatePath: string,
+    httpServletRequestVar: string | undefined,
+  ): Promise<string> {
+    const content = await this.readTemplateContentForAnalysis(templatePath);
+    if (content === undefined) {
+      return "";
+    }
+
+    const requestParams: DetectedRequestParameter[] = httpServletRequestVar
+      ? TemplateParser.extractHttpRequestParameters(content, httpServletRequestVar)
+      : [];
+    const branches: ConditionalBlock[] = TemplateParser.extractConditionalBranches(content);
+
+    const paramsHtml = requestParams.length
+      ? requestParams
+          .map(
+            (p) => `
+                        <tr>
+                            <td>${this.escapeHtml(p.name)}</td>
+                            <td>${p.lineNumber}</td>
+                            <td class="detected-context-cell" title="${this.escapeHtml(p.context)}">${this.escapeHtml(p.context)}</td>
+                        </tr>`,
+          )
+          .join("")
+      : `<tr><td colspan="3" class="empty-state-cell">${
+          httpServletRequestVar
+            ? `No $${this.escapeHtml(httpServletRequestVar)}.getParameter(...) calls with a literal name were found`
+            : "No HTTP Servlet Request variable detected for this template"
+        }</td></tr>`;
+
+    const branchesHtml = branches.length
+      ? branches
+          .map(
+            (block, idx) => `
+                    <div class="detected-branch-block">
+                        <div class="detected-branch-block-header">Decision point ${idx + 1} <span class="detected-branch-line">(line ${block.startLine})</span></div>
+                        <ul class="detected-branch-list">
+                            ${block.branches
+                              .map(
+                                (b) => `
+                            <li>
+                                <span class="detected-branch-type detected-branch-type-${b.type}">${b.type}</span>
+                                ${b.expression ? `<code>${this.escapeHtml(b.expression)}</code>` : "<em>(otherwise)</em>"}
+                                <span class="detected-branch-line">line ${b.lineNumber}</span>
+                            </li>`,
+                              )
+                              .join("")}
+                        </ul>
+                    </div>`,
+          )
+          .join("")
+      : `<div class="empty-state-cell">No #if/#elseif branches detected in this template</div>`;
+
+    return `
+            <div class="config-section">
+                <div class="label-with-info">
+                    <div class="section-label">Detected From Template</div>
+                    <button class="codicon codicon-info info-icon" title="Read-only static analysis of the template: HTTP request parameters and #if/#elseif decision points. Use this as a starting point for building scenarios manually — nothing here is saved automatically."></button>
+                </div>
+
+                <div class="detected-subsection-label">Request Parameters${httpServletRequestVar ? ` ($${this.escapeHtml(httpServletRequestVar)}.getParameter(...))` : ""}</div>
+                <table class="headers-table">
+                    <thead>
+                        <tr>
+                            <th width="200">Name</th>
+                            <th width="60">Line</th>
+                            <th>Context</th>
+                        </tr>
+                    </thead>
+                    <tbody>${paramsHtml}</tbody>
+                </table>
+
+                <div class="separator"></div>
+
+                <div class="detected-subsection-label">Conditional Branches (#if / #elseif / #else)</div>
+                ${branchesHtml}
+            </div>`;
   }
 
   private async detectHttpServletRequestVariable(
@@ -2263,6 +2376,7 @@ export class ContextManager implements IContextServices {
                 <div class="template-path" title="${this.escapeHtml(fullPath)}">${this.escapeHtml(this.normalizeTemplatePath(fullPath))}</div>
             </div>
             ${this.generateMappedVariablesConfigSection(mappings, items, contextData)}
+            ${await this.generateTemplateAnalysisSection(fullPath, effectiveVar)}
             ${this.generateScenariosConfigSection(activeScenario, scenarios, templateData, contextData)}
         `;
 

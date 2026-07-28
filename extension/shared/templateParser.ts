@@ -26,6 +26,26 @@ export interface ExtractedMethod {
 
 export type InferredType = 'string' | 'number' | 'boolean' | 'url' | 'unknown';
 
+export interface DetectedRequestParameter {
+    name: string;
+    lineNumber: number;
+    context: string;
+}
+
+export type BranchType = 'if' | 'elseif' | 'else';
+
+export interface BranchCondition {
+    type: BranchType;
+    expression: string; // raw condition text; empty for 'else'
+    lineNumber: number;
+    variables: string[]; // $variable references found in this condition
+}
+
+export interface ConditionalBlock {
+    startLine: number;
+    branches: BranchCondition[];
+}
+
 export interface ContextItem {
     name: string;
     type: 'variable' | 'object';
@@ -381,6 +401,201 @@ export class TemplateParser {
         return params;
     }
     
+    /**
+     * Escape a string for safe use inside a RegExp
+     */
+    private static escapeRegExp(text: string): string {
+        return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    /**
+     * Detect $<requestVarName>.getParameter("name") / .getParameterValues("name")
+     * calls with a literal string argument. This surfaces exactly the HTTP request
+     * parameters a template statically reads, so a caller can seed a scenario URL's
+     * query string. Calls with a non-literal (dynamic) argument can't be resolved
+     * statically and are skipped.
+     */
+    static extractHttpRequestParameters(content: string, requestVarName: string): DetectedRequestParameter[] {
+        if (!requestVarName) {
+            return [];
+        }
+
+        const cleanedContent = TemplateParser.stripComments(content);
+        const lines = content.split('\n');
+        const cleanedLines = cleanedContent.split('\n');
+
+        const escapedVar = TemplateParser.escapeRegExp(requestVarName);
+        const paramPattern = new RegExp(
+            `\\$${escapedVar}\\.(?:getParameter|getParameterValues)\\s*\\(\\s*(['"])([^'"]*)\\1`,
+            'g',
+        );
+
+        const params = new Map<string, DetectedRequestParameter>();
+        cleanedLines.forEach((line, index) => {
+            let match;
+            while ((match = paramPattern.exec(line)) !== null) {
+                const name = match[2];
+                if (name && !params.has(name)) {
+                    params.set(name, {
+                        name,
+                        lineNumber: index + 1,
+                        context: lines[index].trim(),
+                    });
+                }
+            }
+        });
+
+        return Array.from(params.values());
+    }
+
+    /**
+     * Find the index of the ')' that matches the '(' at content[openIndex].
+     * Skips over parens inside single/double-quoted strings. Returns -1 if unmatched.
+     */
+    private static findMatchingParen(content: string, openIndex: number): number {
+        let depth = 0;
+        let inString = false;
+        let stringChar = '';
+
+        for (let i = openIndex; i < content.length; i++) {
+            const char = content[i];
+            if (inString) {
+                if (char === stringChar && content[i - 1] !== '\\') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (char === '"' || char === "'") {
+                inString = true;
+                stringChar = char;
+            } else if (char === '(') {
+                depth++;
+            } else if (char === ')') {
+                depth--;
+                if (depth === 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Extract $variable / $object.property references from a condition expression
+     */
+    private static extractVariablesFromExpression(expression: string): string[] {
+        const names = new Set<string>();
+        const pattern = /\$([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)/g;
+        let match;
+        while ((match = pattern.exec(expression)) !== null) {
+            names.add(match[1]);
+        }
+        return Array.from(names);
+    }
+
+    /**
+     * Parse #if / #elseif / #else / #end chains into decision points, each with its
+     * branch conditions. Correctly tracks nesting against #foreach, #macro, and
+     * #define blocks (which also close with #end) so unrelated #end directives don't
+     * get attributed to the wrong #if. Directives inside string literals within a
+     * condition (e.g. a literal containing "#end") are not accounted for; this is a
+     * static best-effort scan, not a full Velocity parser.
+     */
+    static extractConditionalBranches(content: string): ConditionalBlock[] {
+        const cleanedContent = TemplateParser.stripComments(content);
+        const directivePattern = /#(if|elseif|else|foreach|macro|define|end)\b/g;
+
+        type Frame = {
+            type: 'if' | 'foreach' | 'macro' | 'define';
+            startLine: number;
+            branches: BranchCondition[];
+        };
+        const stack: Frame[] = [];
+        const blocks: ConditionalBlock[] = [];
+
+        const lineNumberAt = (index: number): number => {
+            let line = 1;
+            for (let i = 0; i < index; i++) {
+                if (cleanedContent[i] === '\n') {
+                    line++;
+                }
+            }
+            return line;
+        };
+
+        let match;
+        while ((match = directivePattern.exec(cleanedContent)) !== null) {
+            const directive = match[1];
+            const lineNumber = lineNumberAt(match.index);
+
+            if (directive === 'end') {
+                const frame = stack.pop();
+                if (frame && frame.type === 'if') {
+                    blocks.push({ startLine: frame.startLine, branches: frame.branches });
+                }
+                continue;
+            }
+
+            if (directive === 'foreach' || directive === 'macro' || directive === 'define') {
+                stack.push({ type: directive, startLine: lineNumber, branches: [] });
+                continue;
+            }
+
+            if (directive === 'if' || directive === 'elseif') {
+                // Find the parenthesized condition immediately following the directive
+                let cursor = directivePattern.lastIndex;
+                while (cursor < cleanedContent.length && /\s/.test(cleanedContent[cursor])) {
+                    cursor++;
+                }
+                let expression = '';
+                if (cleanedContent[cursor] === '(') {
+                    const closeIdx = TemplateParser.findMatchingParen(cleanedContent, cursor);
+                    if (closeIdx !== -1) {
+                        expression = cleanedContent.slice(cursor + 1, closeIdx).trim();
+                        directivePattern.lastIndex = closeIdx + 1;
+                    }
+                }
+                const branch: BranchCondition = {
+                    type: directive,
+                    expression,
+                    lineNumber,
+                    variables: TemplateParser.extractVariablesFromExpression(expression),
+                };
+
+                if (directive === 'if') {
+                    stack.push({ type: 'if', startLine: lineNumber, branches: [branch] });
+                } else {
+                    const top = stack[stack.length - 1];
+                    if (top && top.type === 'if') {
+                        top.branches.push(branch);
+                    }
+                    // #elseif with no enclosing #if is a malformed template; ignore it.
+                }
+                continue;
+            }
+
+            if (directive === 'else') {
+                const top = stack[stack.length - 1];
+                if (top && top.type === 'if') {
+                    top.branches.push({ type: 'else', expression: '', lineNumber, variables: [] });
+                }
+                continue;
+            }
+        }
+
+        // Any #if frames still on the stack at EOF are unterminated (missing #end);
+        // surface them anyway rather than silently dropping detected branches.
+        while (stack.length > 0) {
+            const frame = stack.pop()!;
+            if (frame.type === 'if') {
+                blocks.push({ startLine: frame.startLine, branches: frame.branches });
+            }
+        }
+        blocks.sort((a, b) => a.startLine - b.startLine);
+
+        return blocks;
+    }
+
     /**
      * Get a summary of all references in the template
      */
