@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { ContextData, ContextFileData } from "./contextManager";
 import type { EnvironmentContextConfig, ScenariosData, ScenarioData } from "../shared/types";
 import type { ScenarioHeaderItem, ScenarioVariableItem, UrlSourceOption } from "../shared/messageTypes";
+import type { InferredType } from "../shared/templateParser";
 
 /**
  * Interface exposing the coordinator (ContextManager) capabilities to all service classes.
@@ -171,4 +172,86 @@ export function getScenarioVariablesData(
 
     return { name, value: valueStr, isJson, source, inheritableFrom };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for auto-scaffolding starter context values from static analysis.
+// ---------------------------------------------------------------------------
+
+/**
+ * Names of query parameters already present in a URL's query string (if any).
+ */
+export function extractQueryParamNames(url: string | undefined): string[] {
+  const trimmed = (url || "").trim();
+  const queryStart = trimmed.indexOf("?");
+  if (queryStart === -1) {
+    return [];
+  }
+  const query = trimmed.slice(queryStart + 1);
+  return query
+    .split("&")
+    .filter(Boolean)
+    .map((pair) => {
+      try {
+        return decodeURIComponent(pair.split("=")[0] || "");
+      } catch {
+        return pair.split("=")[0] || "";
+      }
+    })
+    .filter(Boolean);
+}
+
+/**
+ * Append query parameters to a URL's query string, skipping any name that's
+ * already present (either already in the query string, or already scaffolded
+ * before). Preserves everything else about the URL untouched. If url is empty,
+ * produces a bare "?name=value&..." string as a starter — the developer still
+ * needs to fill in the actual scheme/host/path.
+ */
+export function appendQueryParams(
+  url: string | undefined,
+  params: { name: string; value: string }[],
+): string {
+  if (params.length === 0) {
+    return url || "";
+  }
+  const trimmed = (url || "").trim();
+  const queryStart = trimmed.indexOf("?");
+  const base = queryStart === -1 ? trimmed : trimmed.slice(0, queryStart);
+  const existingQuery = queryStart === -1 ? "" : trimmed.slice(queryStart + 1);
+  const existingNames = new Set(extractQueryParamNames(trimmed));
+
+  const additions = params
+    .filter((p) => p.name && !existingNames.has(p.name))
+    .map((p) => `${encodeURIComponent(p.name)}=${encodeURIComponent(p.value)}`);
+
+  if (additions.length === 0) {
+    return trimmed;
+  }
+
+  const newQuery = [existingQuery, ...additions].filter(Boolean).join("&");
+  return `${base}?${newQuery}`;
+}
+
+/**
+ * A generic, type-based starter value for a variable the scaffolder has never
+ * seen before. isJson controls whether the stored string gets JSON.parse'd back
+ * into a real type before rendering (see getScenarioVariables) — this matters
+ * for booleans and numbers specifically, since Velocity's #if treats any non-null
+ * *string* (including the literal string "false") as truthy. Without the JSON
+ * flag, a "false" placeholder would silently render the true branch.
+ */
+export function genericPlaceholderFor(type: InferredType | undefined): { value: string; isJson: boolean } {
+  switch (type) {
+    case "boolean":
+      return { value: "false", isJson: true };
+    case "number":
+      return { value: "0", isJson: true };
+    case "url":
+      return { value: "https://example.com", isJson: false };
+    case "string":
+    case "unknown":
+    default:
+      return { value: "", isJson: false };
+  }
 }

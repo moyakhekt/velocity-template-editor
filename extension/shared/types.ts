@@ -62,6 +62,15 @@ export interface TemplateContextInEnvironment {
     mappedMethods?: { [methodFullName: string]: string }; // Maps template methods to environment mock function names
     scenarios: ScenariosData; // Scenarios for this template
     activeScenario: string; // Currently active scenario for this template
+    // Names of simple variables ever auto-scaffolded into the Default scenario by
+    // static analysis of the template. Once a name is in this list it is never
+    // auto-added again, even if a developer later deletes it (e.g. to deliberately
+    // test the "variable not present" rendering path) — this list is what prevents
+    // the scaffolder from re-adding something that was intentionally removed.
+    autoScaffoldedVariables?: string[];
+    // Same idea, but for HTTP request parameter names appended to the Default
+    // scenario's URL query string.
+    autoScaffoldedRequestParams?: string[];
 }
 
 export interface EnvironmentContextConfig {

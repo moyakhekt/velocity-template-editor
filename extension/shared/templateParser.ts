@@ -597,6 +597,23 @@ export class TemplateParser {
     }
 
     /**
+     * Find the base names of variables used as the source of a #foreach loop, e.g.
+     * #foreach($item in $devices) -> "devices". Only matches a bare $variable as the
+     * loop source (not $object.property), since that's the only shape that maps to a
+     * top-level scenario variable worth seeding as a JSON array placeholder.
+     */
+    static extractForeachSourceVariables(content: string): Set<string> {
+        const cleanedContent = TemplateParser.stripComments(content);
+        const pattern = /#foreach\s*\(\s*\$[a-zA-Z_][a-zA-Z0-9_]*\s+in\s+\$([a-zA-Z_][a-zA-Z0-9_]*)\b(?!\s*[.([])/g;
+        const names = new Set<string>();
+        let match;
+        while ((match = pattern.exec(cleanedContent)) !== null) {
+            names.add(match[1]);
+        }
+        return names;
+    }
+
+    /**
      * Get a summary of all references in the template
      */
     static analyzeTemplate(content: string): {

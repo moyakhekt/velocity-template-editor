@@ -4,7 +4,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { TemplateParser, ContextItem, DetectedRequestParameter, ConditionalBlock } from "../shared/templateParser";
 import { ScenariosData, ScenarioData, EnvironmentContextConfig, MethodImpl, MethodsRecord, IPreviewProvider } from "../shared/types";
-import { IContextServices } from "./contextManagerServices";
+import {
+  IContextServices,
+  appendQueryParams,
+  extractQueryParamNames,
+  genericPlaceholderFor,
+} from "./contextManagerServices";
 import { EnvironmentContextService } from "./environmentContextService";
 import { TemplateDataService } from "./templateDataService";
 import { InputDialogService } from "./inputDialogService";
@@ -92,6 +97,8 @@ export interface ContextFileData {
   methodMappings?: { [methodFullName: string]: string }; // Maps template methods to environment mock function names
   scenarios: ScenariosData; // Named variable sets
   activeScenario: string; // Currently selected scenario
+  autoScaffoldedVariables?: string[]; // Names ever auto-seeded into Default; see ensureTemplateVariablesScaffolded
+  autoScaffoldedRequestParams?: string[]; // Same, for URL query params
 }
 
 export interface ContextItemWithSource {
@@ -571,6 +578,117 @@ export class ContextManager implements IContextServices {
       // Save to environment context
       this.saveTemplateContextToEnvironment(templatePath, templateData);
     } else {
+    }
+  }
+
+  /**
+   * Auto-scaffolds starter values into the Default scenario for anything the
+   * static analyzer detects in the template that has never been seen before:
+   * simple $variables get a generic type-based placeholder, and HTTP request
+   * parameters (via $<httpServletRequestVar>.getParameter(...)) get appended to
+   * the Default scenario's URL query string, since that's the only place
+   * MockHttpServletRequest actually reads parameter values from.
+   *
+   * "Never been seen before" is tracked explicitly via autoScaffoldedVariables /
+   * autoScaffoldedRequestParams rather than "currently absent" — this is
+   * deliberate: a developer may delete a scaffolded (or hand-added) variable from
+   * Default specifically to test how the template renders when it's not present,
+   * and this must not silently reappear the next time the template is opened.
+   * Only the Default scenario is ever touched; other named scenarios are never
+   * modified. Object-type items (accessed via $obj.property or $obj.method())
+   * aren't scaffolded here — those are covered separately by the existing
+   * Template Methods mapping UI.
+   */
+  private async ensureTemplateVariablesScaffolded(templatePath: string): Promise<void> {
+    const templateData = await this.getTemplateContextFileData(templatePath);
+
+    const content = await this.readTemplateContentForAnalysis(templatePath);
+    if (content === undefined) {
+      return;
+    }
+
+    const items = Array.from(TemplateParser.analyzeContext(content).values());
+    const mappings = await this.resolveTemplateMappings(items, templatePath, templateData);
+    const { effectiveVar, localeVar, messagesVar, escapeVar } = mappings;
+
+    if (!templateData.scenarios) {
+      templateData.scenarios = { Default: { variables: {} } };
+    }
+    if (!templateData.scenarios.Default) {
+      templateData.scenarios.Default = { variables: {} };
+    }
+    const defaultScenario = templateData.scenarios.Default;
+    if (!defaultScenario.variables) defaultScenario.variables = {};
+    if (!defaultScenario.variableSources) defaultScenario.variableSources = {};
+    if (!defaultScenario.variableJsonFlags) defaultScenario.variableJsonFlags = {};
+
+    const isFirstRun =
+      templateData.autoScaffoldedVariables === undefined &&
+      templateData.autoScaffoldedRequestParams === undefined;
+
+    const knownVars = new Set(templateData.autoScaffoldedVariables ?? []);
+    const knownParams = new Set(templateData.autoScaffoldedRequestParams ?? []);
+
+    if (isFirstRun) {
+      // Bootstrap from whatever already exists so we never clobber a template
+      // someone has already hand-configured, and don't treat pre-existing
+      // deliberate omissions as "gaps" to fill.
+      Object.values(templateData.scenarios).forEach((scenario) => {
+        Object.keys(scenario.variables || {}).forEach((n) => knownVars.add(n));
+        Object.keys(scenario.variableSources || {}).forEach((n) => knownVars.add(n));
+      });
+      extractQueryParamNames(defaultScenario.url).forEach((n) => knownParams.add(n));
+    }
+
+    const excludedNames = new Set(
+      [effectiveVar, localeVar, messagesVar, escapeVar].filter((v): v is string => !!v),
+    );
+    const foreachSources = TemplateParser.extractForeachSourceVariables(content);
+
+    let changed = false;
+
+    for (const item of items) {
+      if (item.type !== "variable" || excludedNames.has(item.name) || knownVars.has(item.name)) {
+        continue;
+      }
+      knownVars.add(item.name);
+      changed = true;
+
+      if (foreachSources.has(item.name)) {
+        defaultScenario.variables[item.name] = "[]";
+        defaultScenario.variableJsonFlags[item.name] = true;
+      } else {
+        const placeholder = genericPlaceholderFor(item.inferredType);
+        defaultScenario.variables[item.name] = placeholder.value;
+        defaultScenario.variableJsonFlags[item.name] = placeholder.isJson;
+      }
+      defaultScenario.variableSources[item.name] = "self";
+    }
+
+    if (effectiveVar) {
+      const requestParams = TemplateParser.extractHttpRequestParameters(content, effectiveVar);
+      const newParams = requestParams.filter((p) => !knownParams.has(p.name));
+      if (newParams.length > 0) {
+        changed = true;
+        newParams.forEach((p) => knownParams.add(p.name));
+        defaultScenario.url = appendQueryParams(
+          defaultScenario.url,
+          newParams.map((p) => ({ name: p.name, value: "" })),
+        );
+      }
+    }
+
+    if (!changed && !isFirstRun) {
+      return;
+    }
+
+    templateData.autoScaffoldedVariables = Array.from(knownVars);
+    templateData.autoScaffoldedRequestParams = Array.from(knownParams);
+
+    await this.saveTemplateContext(templatePath, templateData);
+    const contextFilePath = this.getContextFilePath(templatePath);
+    if (contextFilePath) {
+      this.contextCache.delete(contextFilePath);
     }
   }
 
@@ -1142,6 +1260,8 @@ export class ContextManager implements IContextServices {
       escapeToolVar: templateConfig.mappedVariables?.escapeToolVar,
       methodMappings: templateConfig.mappedMethods,
       methods: {},
+      autoScaffoldedVariables: templateConfig.autoScaffoldedVariables,
+      autoScaffoldedRequestParams: templateConfig.autoScaffoldedRequestParams,
     };
   }
 
@@ -1174,6 +1294,8 @@ export class ContextManager implements IContextServices {
       mappedMethods: contextData.methodMappings || {},
       scenarios: contextData.scenarios,
       activeScenario: contextData.activeScenario,
+      autoScaffoldedVariables: contextData.autoScaffoldedVariables,
+      autoScaffoldedRequestParams: contextData.autoScaffoldedRequestParams,
     };
 
     this.saveEnvironmentContext();
@@ -1723,6 +1845,13 @@ export class ContextManager implements IContextServices {
     if (!this.panel) {
       return;
     }
+
+    // Scaffold starter values for anything newly detected in the template before
+    // building the panel, so the freshly-added placeholders show up immediately.
+    // Deliberately only runs here (Context Manager open/refresh) rather than on
+    // every preview render, to avoid seeding a placeholder for every partial
+    // variable name typed mid-edit.
+    await this.ensureTemplateVariablesScaffolded(templatePath);
 
     const contextData = await this.getTemplateOnlyContext(templatePath);
 
