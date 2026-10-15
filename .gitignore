@@ -11,3 +11,5 @@ server/bin/
 *.backup2
 *.backup-*
 *.git-head.ts
+# Personal editor/assistant config (AppMap MCP servers)
+.vscode/mcp.json
