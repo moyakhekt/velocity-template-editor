@@ -7,6 +7,7 @@ import { VelocityServerClient } from './server/velocityServerClient';
 import { ScenariosData } from './shared/types';
 import { resolveTemplatePath } from './context/contextManagerServices';
 import { isDebugLogging } from './shared/debugLogging';
+import { splitVariablesAndMocks } from './shared/renderInput';
 
 export class VelocityPreviewProvider {
     private context: vscode.ExtensionContext;
@@ -247,47 +248,7 @@ export class VelocityPreviewProvider {
 
         const contextData = await this.contextManager.getContextForTemplate(templatePath);
 
-        // Separate variables from method mocks
-        const variables: Record<string, any> = {};
-        const mocks: Record<string, Record<string, any>> = {};
-
-        for (const [key, value] of Object.entries(contextData)) {
-            if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-                // Check if this object has methods with _implementation
-                const hasMethods = Object.values(value).some(
-                    (v: any) => v && typeof v === 'object' && '_implementation' in v
-                );
-
-                if (hasMethods) {
-                    // This is an object with method mocks
-                    mocks[key] = {};
-                    for (const [methodName, methodData] of Object.entries(value)) {
-                        if (methodData && typeof methodData === 'object' && '_implementation' in (methodData as any)) {
-                            mocks[key][methodName] = {
-                                name: methodName,
-                                implementation: (methodData as any)._implementation
-                            };
-                        } else {
-                            // Regular property, add to variables
-                            if (!variables[key]) {
-                                variables[key] = {};
-                            }
-                            variables[key][methodName] = methodData;
-                        }
-                    }
-                    // Keep the object in variables only if it has non-method properties
-                    if (!variables[key] || Object.keys(variables[key]).length === 0) {
-                        delete variables[key];
-                    }
-                } else {
-                    // Regular variable
-                    variables[key] = value;
-                }
-            } else {
-                // Primitive value
-                variables[key] = value;
-            }
-        }
+        const { variables, mocks } = splitVariablesAndMocks(contextData);
 
         try {
             if (!this.velocityServer) {

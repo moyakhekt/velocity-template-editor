@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { runScreenshots } from "../server/screenshotRunner";
+import { isDebugLogging } from "../shared/debugLogging";
 import { VelocityServerClient } from "../server/velocityServerClient";
 import { TestCommand, isWebviewMessage } from "../shared/messageTypes";
 import { ContextItem, TemplateParser } from "../shared/templateParser";
@@ -1206,7 +1207,7 @@ private environmentContext: EnvironmentContextConfig = {
     const contextFilePath = this.getContextFilePath(templatePath);
 
     // Load existing file to preserve structure
-    let existingData: ContextFileData =
+    const existingData: ContextFileData =
       await this.getTemplateContextFileData(templatePath);
 
     // Update only the active scenario's variables
@@ -1289,7 +1290,7 @@ private environmentContext: EnvironmentContextConfig = {
           title: "✓ Velocity template detected",
           cancellable: false,
         },
-        async (progress) => {
+        async () => {
           return new Promise((resolve) => setTimeout(resolve, 3000));
         },
       );
@@ -1602,7 +1603,7 @@ private environmentContext: EnvironmentContextConfig = {
 
     webviewView.webview.onDidReceiveMessage(
       async (message) => {
-        await this.handleWebviewMessage(message, this.templateFilePath);
+        await this.handleWebviewMessage(message);
       },
       undefined,
       this.context.subscriptions,
@@ -1644,8 +1645,9 @@ private environmentContext: EnvironmentContextConfig = {
 </html>`;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private buildEnvironmentHandlers(
+    // Each handler gets the payload for its own command; isWebviewMessage has checked `command`
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     msg: any,
     currentTemplatePath: string,
   ): Record<string, () => Promise<void>> {
@@ -1659,7 +1661,7 @@ private environmentContext: EnvironmentContextConfig = {
       saveEnvironmentContext: () =>
         this.envService.handlesaveEnvironmentContext(currentTemplatePath),
       changeTemplateContextFile: () =>
-        this.envService.handleChangeTemplateContextFile(currentTemplatePath),
+        this.envService.handleChangeTemplateContextFile(),
       reloadTemplateContext: () =>
         this.envService.handleReloadTemplateContext(currentTemplatePath),
       createTemplateGroup: () =>
@@ -1686,62 +1688,29 @@ private environmentContext: EnvironmentContextConfig = {
       saveEnvironmentHeaders: () =>
         this.envService.handleSaveEnvironmentHeaders(msg, currentTemplatePath),
       saveEnvironmentHeaderRow: () =>
-        this.envService.handleSaveEnvironmentHeaderRow(
-          msg,
-          currentTemplatePath,
-        ),
+        this.envService.handleSaveEnvironmentHeaderRow(msg),
       saveNewEnvironmentHeader: () =>
-        this.envService.handleSaveNewEnvironmentHeader(
-          msg,
-          currentTemplatePath,
-        ),
+        this.envService.handleSaveNewEnvironmentHeader(msg),
       deleteEnvironmentHeader: () =>
-        this.envService.handleDeleteEnvironmentHeader(msg, currentTemplatePath),
+        this.envService.handleDeleteEnvironmentHeader(msg),
       saveEnvironmentCspDirectiveRow: () =>
-        this.envService.handleSaveEnvironmentCspDirectiveRow(
-          msg,
-          currentTemplatePath,
-        ),
+        this.envService.handleSaveEnvironmentCspDirectiveRow(msg),
       saveNewEnvironmentCspDirective: () =>
-        this.envService.handleSaveNewEnvironmentCspDirective(
-          msg,
-          currentTemplatePath,
-        ),
+        this.envService.handleSaveNewEnvironmentCspDirective(msg),
       deleteEnvironmentCspDirective: () =>
-        this.envService.handleDeleteEnvironmentCspDirective(
-          msg,
-          currentTemplatePath,
-        ),
+        this.envService.handleDeleteEnvironmentCspDirective(msg),
       saveEnvironmentVariableRow: () =>
-        this.envService.handleSaveEnvironmentVariableRow(
-          msg,
-          currentTemplatePath,
-        ),
+        this.envService.handleSaveEnvironmentVariableRow(msg),
       saveNewEnvironmentVariable: () =>
-        this.envService.handleSaveNewEnvironmentVariable(
-          msg,
-          currentTemplatePath,
-        ),
+        this.envService.handleSaveNewEnvironmentVariable(msg),
       deleteEnvironmentVariable: () =>
-        this.envService.handleDeleteEnvironmentVariable(
-          msg,
-          currentTemplatePath,
-        ),
+        this.envService.handleDeleteEnvironmentVariable(msg),
       saveNewEnvironmentMockFunction: () =>
-        this.envService.handleSaveNewEnvironmentMockFunction(
-          msg,
-          currentTemplatePath,
-        ),
+        this.envService.handleSaveNewEnvironmentMockFunction(msg),
       saveEnvironmentMockFunctionRow: () =>
-        this.envService.handleSaveEnvironmentMockFunctionRow(
-          msg,
-          currentTemplatePath,
-        ),
+        this.envService.handleSaveEnvironmentMockFunctionRow(msg),
       deleteEnvironmentMockFunction: () =>
-        this.envService.handleDeleteEnvironmentMockFunction(
-          msg,
-          currentTemplatePath,
-        ),
+        this.envService.handleDeleteEnvironmentMockFunction(msg),
       saveMessagesFilePath: () =>
         this.envService.handleSaveMessagesFilePath(msg, currentTemplatePath),
       browseMessagesFile: () =>
@@ -1751,8 +1720,9 @@ private environmentContext: EnvironmentContextConfig = {
     };
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private buildTemplateDataHandlers(
+    // Each handler gets the payload for its own command; isWebviewMessage has checked `command`
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     msg: any,
     contextData: ContextData,
     currentTemplatePath: string,
@@ -1882,8 +1852,9 @@ private environmentContext: EnvironmentContextConfig = {
     };
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private buildScenarioHandlers(
+    // Each handler gets the payload for its own command; isWebviewMessage has checked `command`
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     msg: any,
     currentTemplatePath: string,
   ): Record<string, () => Promise<void>> {
@@ -1961,10 +1932,7 @@ private environmentContext: EnvironmentContextConfig = {
     };
   }
 
-  private async handleWebviewMessage(
-    message: unknown,
-    templatePath: string,
-  ): Promise<void> {
+  private async handleWebviewMessage(message: unknown): Promise<void> {
     if (!isWebviewMessage(message)) {
       this.outputChannel.appendLine(
         `[Webview] Rejected malformed message: ${JSON.stringify(message)}`,
@@ -1990,7 +1958,7 @@ private environmentContext: EnvironmentContextConfig = {
     }
   }
 
-  private async handleTestCommand(message: TestCommand): Promise<void> {
+  private async handleTestCommand(_message: TestCommand): Promise<void> {
     vscode.window.setStatusBarMessage("$(check) Webview button clicked!", 3000);
   }
 
@@ -2099,23 +2067,24 @@ private environmentContext: EnvironmentContextConfig = {
     try {
       const templateContent = await fs.promises.readFile(templatePath, "utf8");
       contextItems = TemplateParser.analyzeContext(templateContent);
-
-      // Debug logging
-      contextItems.forEach((item, key) => {});
     } catch (error) {
       parseError = error instanceof Error ? error.message : String(error);
+    }
+
+    if (parseError) {
+      this.outputChannel.appendLine(`[Context] Failed to analyze template "${templatePath}": ${parseError}`);
     }
 
     const html = await this.renderer.getWebviewHtml(
       contextData,
       contextItems,
       path.basename(templatePath),
-      parseError,
     );
 
-    // Write HTML to temp file for inspection
-    const tempPath = path.join(os.tmpdir(), "velocity-context-debug.html");
-    await fs.promises.writeFile(tempPath, html, "utf8");
+    // A copy of the view's HTML for inspection, when debugging
+    if (isDebugLogging()) {
+      await fs.promises.writeFile(path.join(os.tmpdir(), "velocity-context-debug.html"), html, "utf8");
+    }
 
     this.view.webview.html = html;
   }

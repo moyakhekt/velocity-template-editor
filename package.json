@@ -20,6 +20,18 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "keywords": [
+    "velocity",
+    "apache velocity",
+    "vtl",
+    "vm",
+    "template",
+    "templates",
+    "preview",
+    "mock data",
+    "scenarios",
+    "pingfederate"
+  ],
   "categories": [
     "Programming Languages",
     "Other"
@@ -169,26 +181,34 @@
     "vscode:prepublish": "npm run build:all",
     "compile": "node ./esbuild.js",
     "watch": "node ./esbuild.js --watch",
+    "lint": "eslint .",
     "test": "jest",
     "pretest": "npm run compile",
-    "lint": "eslint extension --ext ts",
     "build:java": "cd server && mvn clean package -DskipTests",
     "build:all": "npm run compile && npm run build:java",
     "clean": "rimraf out && cd server && mvn clean"
   },
+  "overrides": {
+    "@istanbuljs/load-nyc-config": {
+      "js-yaml": {
+        "argparse": "^2.0.1"
+      }
+    }
+  },
   "devDependencies": {
-    "@types/jest": "^29.5.14",
+    "@eslint/js": "^9.39.5",
+    "@types/jest": "^30.0.0",
     "@types/node": "^20.19.43",
     "@types/vscode": "^1.85.0",
-    "@typescript-eslint/eslint-plugin": "^6.x",
-    "@typescript-eslint/parser": "^6.x",
     "@vscode/codicons": "^0.0.44",
-    "esbuild": "^0.19.x",
-    "eslint": "^8.x",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
     "fs-extra": "^11.3.3",
-    "jest": "^29.7.0",
-    "ts-jest": "^29.4.6",
-    "typescript": "^5.3.x"
+    "globals": "^17.13.0",
+    "jest": "^30.5.2",
+    "ts-jest": "^29.4.15",
+    "typescript": "^5.3.x",
+    "typescript-eslint": "^8.71.2"
   },
   "dependencies": {
     "playwright-core": "^1.49.0"

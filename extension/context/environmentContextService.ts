@@ -275,7 +275,7 @@ export class EnvironmentContextService {
     }
   }
 
-  async handleChangeTemplateContextFile(currentTemplatePath: string): Promise<void> {
+  async handleChangeTemplateContextFile(): Promise<void> {
     vscode.window.showInformationMessage(
       "Template context is now managed through the Environment Context file. Use the Environment Context tab to manage settings.",
     );
@@ -460,7 +460,6 @@ export class EnvironmentContextService {
 
   async handleSaveEnvironmentHeaderRow(
     message: SaveEnvironmentHeaderRowCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -526,7 +525,6 @@ export class EnvironmentContextService {
 
   async handleSaveNewEnvironmentHeader(
     message: SaveNewEnvironmentHeaderCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -574,7 +572,6 @@ export class EnvironmentContextService {
 
   async handleDeleteEnvironmentHeader(
     message: DeleteEnvironmentHeaderCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -605,7 +602,6 @@ export class EnvironmentContextService {
 
   async handleSaveNewEnvironmentCspDirective(
     message: SaveNewEnvironmentCspDirectiveCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -639,7 +635,6 @@ export class EnvironmentContextService {
 
   async handleSaveEnvironmentCspDirectiveRow(
     message: SaveEnvironmentCspDirectiveRowCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -703,7 +698,6 @@ export class EnvironmentContextService {
 
   async handleDeleteEnvironmentCspDirective(
     message: DeleteEnvironmentCspDirectiveCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -734,7 +728,6 @@ export class EnvironmentContextService {
 
   async handleSaveNewEnvironmentVariable(
     message: SaveNewEnvironmentVariableCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -776,7 +769,6 @@ export class EnvironmentContextService {
 
   async handleDeleteEnvironmentVariable(
     message: DeleteEnvironmentVariableCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -799,7 +791,6 @@ export class EnvironmentContextService {
 
   async handleSaveEnvironmentVariableRow(
     message: SaveEnvironmentVariableRowCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -875,7 +866,6 @@ export class EnvironmentContextService {
 
   async handleSaveNewEnvironmentMockFunction(
     message: SaveNewEnvironmentMockFunctionCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -924,7 +914,6 @@ export class EnvironmentContextService {
 
   async handleSaveEnvironmentMockFunctionRow(
     message: SaveEnvironmentMockFunctionRowCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -987,7 +976,6 @@ export class EnvironmentContextService {
 
   async handleDeleteEnvironmentMockFunction(
     message: DeleteEnvironmentMockFunctionCommand,
-    currentTemplatePath: string,
   ): Promise<void> {
     if (!(await this.deps.ensureEnvironmentContextFile())) {
       return;
@@ -1046,8 +1034,7 @@ export class EnvironmentContextService {
   private isValidJavaScript(code: string): { valid: boolean; error?: string } {
     try {
       // Checks syntax only; does not execute the code.
-      // eslint-disable-next-line no-new-func
-      new Function(code);
+  new Function(code);
       return { valid: true };
     } catch (e) {
       return { valid: false, error: e instanceof Error ? e.message : String(e) };

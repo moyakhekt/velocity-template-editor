@@ -1,7 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
-import { EnvironmentContextConfig, TemplateContextInEnvironment, ScenarioData } from '../shared/types';
+import { AddressInfo } from 'net';
+import { EnvironmentContextConfig } from '../shared/types';
+import { splitVariablesAndMocks } from '../shared/renderInput';
 import { VelocityServerClient } from './velocityServerClient';
 
 export interface ScreenshotProgress {
@@ -27,52 +29,8 @@ export interface ScreenshotRunResult {
 // Minimal interface for what screenshotRunner needs from ContextManager
 export interface ScreenshotContextSource {
     getEnvironmentContext(): EnvironmentContextConfig;
-    getContextForSpecificScenario(templatePath: string, scenarioName: string): Promise<Record<string, any>>;
+    getContextForSpecificScenario(templatePath: string, scenarioName: string): Promise<Record<string, unknown>>;
     getTemplateMappings(templatePath: string): Promise<{ localeVar?: string; templateMessagesVar?: string; escapeToolVar?: string }>;
-}
-
-/**
- * Splits a merged context object into variables and method mocks,
- * matching the logic in preview.ts.
- */
-function splitContextIntoVariablesAndMocks(
-    contextData: Record<string, any>
-): { variables: Record<string, any>; mocks: Record<string, Record<string, any>> } {
-    const variables: Record<string, any> = {};
-    const mocks: Record<string, Record<string, any>> = {};
-
-    for (const [key, value] of Object.entries(contextData)) {
-        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-            const hasMethods = Object.values(value).some(
-                (v: any) => v && typeof v === 'object' && '_implementation' in v
-            );
-            if (hasMethods) {
-                mocks[key] = {};
-                for (const [methodName, methodData] of Object.entries(value)) {
-                    if (methodData && typeof methodData === 'object' && '_implementation' in (methodData as any)) {
-                        mocks[key][methodName] = {
-                            name: methodName,
-                            implementation: (methodData as any)._implementation,
-                        };
-                    } else {
-                        if (!variables[key]) {
-                            variables[key] = {};
-                        }
-                        variables[key][methodName] = methodData;
-                    }
-                }
-                if (!variables[key] || Object.keys(variables[key]).length === 0) {
-                    delete variables[key];
-                }
-            } else {
-                variables[key] = value;
-            }
-        } else {
-            variables[key] = value;
-        }
-    }
-
-    return { variables, mocks };
 }
 
 export async function runScreenshots(
@@ -200,7 +158,7 @@ export async function runScreenshots(
 
     const serverPort = await new Promise<number>((resolve, reject) => {
         assetServer.listen(0, 'localhost', () => {
-            resolve((assetServer.address() as any).port);
+            resolve((assetServer.address() as AddressInfo).port);
         }).on('error', reject);
     });
 
@@ -245,14 +203,14 @@ export async function runScreenshots(
 
                 // Get merged context using the raw key (matches environment context lookup)
                 const contextData = await contextSource.getContextForSpecificScenario(rawKey, scenarioName);
-                const { variables, mocks } = splitContextIntoVariablesAndMocks(contextData);
+                const { variables, mocks } = splitVariablesAndMocks(contextData);
 
                 // Get messages paths and language from environment context
                 let messagesPropertiesPaths: string[] = [];
                 if (environmentContext.messagesPropertiesPaths) {
                     messagesPropertiesPaths = environmentContext.messagesPropertiesPaths;
-                } else if ((environmentContext as any).messagesPropertiesPath) {
-                    messagesPropertiesPaths = [(environmentContext as any).messagesPropertiesPath];
+                } else if (environmentContext.messagesPropertiesPath) {
+                    messagesPropertiesPaths = [environmentContext.messagesPropertiesPath];
                 }
                 const language = environmentContext.language || 'en';
                 const templateMappings = await contextSource.getTemplateMappings(rawKey);

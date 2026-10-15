@@ -6,8 +6,8 @@ function setupEventListeners() {
     // Setup tab click handlers
     const tabs = document.querySelectorAll('.tab[data-tab]');
     
-    tabs.forEach((tab, index) => {
-        tab.addEventListener('click', (e) => {
+    tabs.forEach((tab) => {
+        tab.addEventListener('click', () => {
             switchTab(tab.getAttribute('data-tab'));
         });
     });
@@ -25,15 +25,6 @@ function setupEventListeners() {
 
             switch (action) {
                 // --- items with data attributes ---
-                case 'deleteItem': {
-                    const type = button.getAttribute('data-type');
-                    const name = button.getAttribute('data-name') || '';
-                    const obj = button.getAttribute('data-object') || '';
-                    const prop = button.getAttribute('data-prop') || '';
-                    const method = button.getAttribute('data-method') || '';
-                    deleteItem(type, name, obj, prop, method);
-                    break;
-                }
                 case 'deleteEnvironmentHeader':
                     deleteEnvironmentHeader(button.getAttribute('data-name'));
                     break;
@@ -269,9 +260,7 @@ function setupEventListeners() {
     // Handle select change events
     document.addEventListener('change', (e) => {
         const target = e.target;
-        if (target.hasAttribute('data-action')) {
-        }
-        
+
         // Handle checkbox toggles (e.g., JSON flag for scenario variables)
         if (target.matches('input[type="checkbox"][data-action]')) {
             const action = target.getAttribute('data-action');
@@ -886,9 +875,6 @@ window.addEventListener('message', event => {
         case 'deleteEnvironmentVariable':
             deleteEnvironmentVariableDOM(message);
             break;
-        case 'updateScenarioVariable':
-            updateScenarioVariableDOM(message);
-            break;
         case 'deleteScenarioVariable':
             deleteScenarioVariableDOM(message);
             break;
@@ -906,9 +892,6 @@ window.addEventListener('message', event => {
             break;
         case 'addToDropdown':
             addOptionToDropdown(message);
-            break;
-        case 'updateScenarioSection':
-            updateScenarioSectionDOM(message);
             break;
         case 'hideVariableRow':
             hideVariableRowDOM(message);
@@ -1197,80 +1180,6 @@ function deleteEnvironmentMockFunctionRowDOM(msg) {
     const row = tbody.querySelector(`tr[data-mock-name="${cssEscape(msg.name)}"]`);
     if (row) {
         row.remove();
-    }
-}
-
-function updateScenarioVariableDOM(msg) {
-    const row = document.querySelector(`#template-tab tr[data-scenario-var="${msg.name}"]`);
-    if (row) {
-        const valueCell = row.querySelector('.value-cell input');
-        if (valueCell && msg.value !== undefined) {
-            valueCell.value = msg.value;
-        }
-        const sourceSelect = row.querySelector('.source-select');
-        if (sourceSelect && msg.source) {
-            sourceSelect.value = msg.source;
-        }
-    } else {
-        const tbody = document.querySelector('#scenario-vars-table tbody');
-        if (tbody) {
-            const tr = document.createElement('tr');
-            tr.setAttribute('data-scenario-var', msg.name);
-            
-            // Column 1: Variable name
-            const col1 = document.createElement('td');
-            col1.textContent = '$' + msg.name;
-            tr.appendChild(col1);
-            
-            // Column 2: Source select
-            const col2 = document.createElement('td');
-            const select = document.createElement('select');
-            select.className = 'source-select';
-            const optScenario = document.createElement('option');
-            optScenario.value = 'scenario';
-            optScenario.textContent = 'Scenario Context (Self)';
-            optScenario.selected = msg.source === 'scenario';
-            const optTemplate = document.createElement('option');
-            optTemplate.value = 'template';
-            optTemplate.textContent = 'Template Context';
-            optTemplate.selected = msg.source === 'template';
-            const optEnvironment = document.createElement('option');
-            optEnvironment.value = 'environment';
-            optEnvironment.textContent = 'Environment Context';
-            optEnvironment.selected = msg.source === 'environment';
-            select.appendChild(optScenario);
-            select.appendChild(optTemplate);
-            select.appendChild(optEnvironment);
-            select.addEventListener('change', () => changeScenarioVariableSource(msg.name, select.value));
-            col2.appendChild(select);
-            tr.appendChild(col2);
-            
-            // Column 3: Value input
-            const col3 = document.createElement('td');
-            col3.className = 'value-cell';
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.value = msg.value;
-            input.addEventListener('blur', () => saveScenarioVariable(msg.name, input.value));
-            col3.appendChild(input);
-            tr.appendChild(col3);
-            
-            // Column 4: Delete button
-            const col4 = document.createElement('td');
-            const deleteBtn = document.createElement('button');
-            deleteBtn.className = 'delete-button';
-            deleteBtn.textContent = 'Delete';
-            deleteBtn.addEventListener('click', () => requestDelete('deleteScenarioVariable', msg.name));
-            col4.appendChild(deleteBtn);
-            tr.appendChild(col4);
-            
-            const addRow = tbody.querySelector('#scenario-add-row');
-            if (addRow) {
-                tbody.insertBefore(tr, addRow);
-            } else {
-                tbody.appendChild(tr);
-            }
-        }
     }
 }
 
@@ -1624,107 +1533,6 @@ function addOptionToDropdown(msg) {
     }
 }
 
-// Handle scenario variable rows display
-function handleScenarioVariablesDisplay(msg) {
-    if (msg.variables) {
-        const tbody = document.querySelector('#scenario-variables tbody');
-        const addRow = document.getElementById('scenario-add-row');
-        
-        if (tbody) {
-            // Clear existing variable rows (keep add row)
-            const rows = Array.from(tbody.querySelectorAll('tr:not(#scenario-add-row)'));
-            rows.forEach(row => row.remove());
-            
-            // Add variable rows
-            msg.variables.forEach(varData => {
-                const tr = document.createElement('tr');
-                
-                // Column 1: Variable name
-                const col1 = document.createElement('td');
-                col1.textContent = '$' + varData.name;
-                tr.appendChild(col1);
-                
-                // Column 2: Source select
-                const col2 = document.createElement('td');
-                const select = document.createElement('select');
-                select.className = 'source-select';
-                const optScenario = document.createElement('option');
-                optScenario.value = 'scenario';
-                optScenario.textContent = 'Scenario Context (Self)';
-                optScenario.selected = varData.source === 'scenario';
-                const optTemplate = document.createElement('option');
-                optTemplate.value = 'template';
-                optTemplate.textContent = 'Template Context';
-                optTemplate.selected = varData.source === 'template';
-                const optEnvironment = document.createElement('option');
-                optEnvironment.value = 'environment';
-                optEnvironment.textContent = 'Environment Context';
-                optEnvironment.selected = varData.source === 'environment';
-                select.appendChild(optScenario);
-                select.appendChild(optTemplate);
-                select.appendChild(optEnvironment);
-                
-                // Add other scenarios if available
-                if (msg.otherScenarios) {
-                    msg.otherScenarios.forEach(s => {
-                        const opt = document.createElement('option');
-                        opt.value = 'scenario:' + s;
-                        opt.textContent = 'Scenario Context (' + s + ')';
-                        opt.selected = varData.source === 'scenario:' + s;
-                        select.appendChild(opt);
-                    });
-                }
-                
-                select.addEventListener('change', () => changeScenarioVariableSource(varData.name, select.value));
-                col2.appendChild(select);
-                tr.appendChild(col2);
-                
-                // Column 3: Value input
-                const col3 = document.createElement('td');
-                col3.className = 'value-cell';
-                const input = document.createElement('input');
-                input.type = 'text';
-                input.value = varData.value;
-                input.addEventListener('blur', () => saveScenarioVariable(varData.name, input.value));
-                col3.appendChild(input);
-                tr.appendChild(col3);
-                
-                // Column 4: Delete button
-                const col4 = document.createElement('td');
-                const deleteBtn = document.createElement('button');
-                deleteBtn.className = 'delete-button';
-                deleteBtn.textContent = 'Delete';
-                deleteBtn.addEventListener('click', () => requestDelete('deleteScenarioVariable', varData.name));
-                col4.appendChild(deleteBtn);
-                tr.appendChild(col4);
-                
-                if (addRow) {
-                    tbody.insertBefore(tr, addRow);
-                } else {
-                    tbody.appendChild(tr);
-                }
-            });
-        }
-    }
-    
-    if (msg.availableVariables) {
-        const select = document.getElementById('scenario-add-name');
-        if (select) {
-            const firstOption = select.querySelector('option[value=""]');
-            select.innerHTML = '';
-            if (firstOption) {
-                select.appendChild(firstOption);
-            }
-            msg.availableVariables.forEach(varName => {
-                const option = document.createElement('option');
-                option.value = varName;
-                option.textContent = '$' + varName;
-                select.appendChild(option);
-            });
-        }
-    }
-}
-
 function hideVariableRowDOM(msg) {
     const row = document.querySelector(`tr[data-var="${msg.name}"]`);
     if (row) {
@@ -1788,27 +1596,12 @@ function loadEnvironmentContext() {
     vscode.postMessage({ command: 'loadEnvironmentContext' });
 }
 
-function changeTemplateContextFile() {
-    vscode.postMessage({ command: 'changeTemplateContextFile' });
-}
-
 function reloadTemplateContext() {
     vscode.postMessage({ command: 'reloadTemplateContext' });
 }
 
 function saveEnvironmentContextAs() {
     vscode.postMessage({ command: 'saveEnvironmentContextAs' });
-}
-
-function promoteToEnvironment(itemType, name, objectName, propertyName, methodName) {
-    vscode.postMessage({
-        command: 'promoteToEnvironment',
-        itemType,
-        name,
-        objectName,
-        propertyName,
-        methodName
-    });
 }
 
 function saveValue(name, objectName, propertyName) {
@@ -1819,7 +1612,7 @@ function saveValue(name, objectName, propertyName) {
     let value = input.value;
     try {
         value = JSON.parse(value);
-    } catch (e) {
+    } catch {
         // Keep as string if not valid JSON
     }
     
@@ -1850,7 +1643,7 @@ function saveEnvironmentValue(name, objectName, propertyName) {
     let value = input.value;
     try {
         value = JSON.parse(value);
-    } catch (e) {
+    } catch {
         // Keep as string
     }
     
@@ -2103,94 +1896,6 @@ function deleteEnvironmentMockFunction(name) {
     });
 }
 
-function saveTemplateUrl() {
-    const input = document.getElementById('template-url');
-    const url = input.value;
-    const scenario = input.getAttribute('data-scenario');
-    vscode.postMessage({
-        command: 'saveTemplateUrl',
-        url,
-        scenario
-    });
-}
-
-function saveTemplateHeaders() {
-    const headers = document.getElementById('template-headers').value;
-    vscode.postMessage({
-        command: 'saveTemplateHeaders',
-        headers
-    });
-}
-
-function saveHttpServletRequestVar(variable) {
-    if (variable === undefined) {
-        const select = document.getElementById('servlet-var-select');
-        variable = select ? select.value : '';
-    }
-    vscode.postMessage({
-        command: 'saveHttpServletRequestVar',
-        variable
-    });
-}
-
-function clearHttpServletRequestVar() {
-    vscode.postMessage({
-        command: 'clearHttpServletRequestVar'
-    });
-}
-
-function saveLocaleVar(variable) {
-    if (variable === undefined) {
-        const select = document.getElementById('locale-var-select');
-        variable = select ? select.value : '';
-    }
-    vscode.postMessage({
-        command: 'setLocaleMapping',
-        variable: variable || null
-    });
-}
-
-function clearLocaleVar() {
-    vscode.postMessage({
-        command: 'setLocaleMapping',
-        variable: null
-    });
-}
-
-function saveMessagesVar(variable) {
-    if (variable === undefined) {
-        const select = document.getElementById('messages-var-select');
-        variable = select ? select.value : '';
-    }
-    vscode.postMessage({
-        command: 'setMessagesMapping',
-        variable: variable || null
-    });
-}
-
-function clearMessagesVar() {
-    vscode.postMessage({
-        command: 'setMessagesMapping',
-        variable: null
-    });
-}
-
-function switchScenario() {
-    const select = document.getElementById('scenario-select');
-    if (!select || !select.value) return;
-    
-    vscode.postMessage({
-        command: 'switchScenario',
-        scenario: select.value
-    });
-}
-
-function createScenario() {
-    vscode.postMessage({
-        command: 'createScenario'
-    });
-}
-
 function addScenario() {
     // Show inline row for adding new scenario
     showNewScenarioRow();
@@ -2230,26 +1935,6 @@ function deleteScenarioByName(name) {
     });
 }
 
-function renameScenario() {
-    const select = document.getElementById('scenario-select');
-    if (!select || !select.value) return;
-    
-    vscode.postMessage({
-        command: 'renameScenario',
-        oldName: select.value
-    });
-}
-
-function setScenarioInheritance() {
-    const select = document.getElementById('inherit-from-select');
-    if (!select) return;
-    
-    vscode.postMessage({
-        command: 'setScenarioInheritance',
-        inheritFrom: select.value
-    });
-}
-
 function changeUrlSource(source) {
     // Update URL input disabled state
     const urlInput = document.getElementById('template-url');
@@ -2260,34 +1945,6 @@ function changeUrlSource(source) {
     vscode.postMessage({
         command: 'changeUrlSource',
         source: source
-    });
-}
-
-function saveScenarioUrl() {
-    const input = document.getElementById('scenario-url');
-    if (!input) return;
-    
-    vscode.postMessage({
-        command: 'saveScenarioUrl',
-        url: input.value.trim()
-    });
-}
-
-function saveScenarioHeaders() {
-    const textarea = document.getElementById('scenario-headers');
-    if (!textarea) return;
-    
-    vscode.postMessage({
-        command: 'saveScenarioHeaders',
-        headers: textarea.value.trim()
-    });
-}
-
-function saveScenarioVariable(name, value) {
-    vscode.postMessage({
-        command: 'saveScenarioVariable',
-        name: name,
-        value: value
     });
 }
 
@@ -2336,14 +1993,6 @@ function saveNewScenarioVariable() {
     });
 }
 
-function toggleScenarioVariableJson(name, isJson) {
-    vscode.postMessage({
-        command: 'toggleScenarioVariableJson',
-        name: name,
-        isJson: isJson
-    });
-}
-
 function cancelNewScenarioVariable() {
     // Handle directly in frontend - just remove the row
     removeNewRow({ type: 'scenarioVariable' });
@@ -2360,20 +2009,6 @@ function addVariableToConfig() {
         type: type
     });
     select.value = '';
-}
-
-function saveEscapeVar(value) {
-    vscode.postMessage({
-        command: 'setEscapeMapping',
-        variable: value || null
-    });
-}
-
-function clearEscapeVar() {
-    vscode.postMessage({
-        command: 'setEscapeMapping',
-        variable: null
-    });
 }
 
 function setVariableSource(name, source) {
@@ -2402,102 +2037,12 @@ function setMethodSource(objectName, methodName, source) {
     });
 }
 
-function showEnvironmentVariableAddRow() {
-    const addRow = document.getElementById('environment-add-row');
-    if (addRow) {
-        addRow.style.display = '';
-        document.getElementById('environment-add-name').focus();
-    }
-}
-
-function hideEnvironmentVariableAddRow() {
-    const addRow = document.getElementById('environment-add-row');
-    if (addRow) {
-        addRow.style.display = 'none';
-        document.getElementById('environment-add-name').value = '';
-        document.getElementById('environment-add-value').value = '';
-    }
-}
-
-function confirmaddEnvironmentVariable() {
-    const nameInput = document.getElementById('environment-add-name');
-    const valueInput = document.getElementById('environment-add-value');
-    if (!nameInput || !valueInput || !nameInput.value.trim()) return;
-    
-    vscode.postMessage({
-        command: 'saveEnvironmentVariable',
-        name: nameInput.value.trim(),
-        value: valueInput.value
-    });
-    
-    hideEnvironmentVariableAddRow();
-}
-
-function addEnvironmentVariableLegacy() {
-    const nameInput = document.getElementById('add-environment-var-name');
-    const valueInput = document.getElementById('add-environment-var-value');
-    if (!nameInput || !valueInput || !nameInput.value.trim()) return;
-    
-    vscode.postMessage({
-        command: 'saveEnvironmentVariable',
-        name: nameInput.value.trim(),
-        value: valueInput.value
-    });
-    
-    nameInput.value = '';
-    valueInput.value = '';
-}
-
 function saveEnvironmentVariableValue(name, value) {
     vscode.postMessage({
         command: 'saveEnvironmentVariable',
         name: name,
         value: value
     });
-}
-
-function deleteEnvironmentVariableLegacy(name) {
-    vscode.postMessage({
-        command: 'requestDeleteConfirm',
-        message: 'Delete environment variable $' + name + '?',
-        deleteCommand: 'deleteEnvironmentVariable',
-        name: name
-    });
-}
-
-function showTemplateVariableAddRow() {
-    const addRow = document.getElementById('template-add-row');
-    if (addRow) {
-        addRow.style.display = '';
-        document.getElementById('template-add-name').focus();
-    }
-}
-
-function hideTemplateVariableAddRow() {
-    const addRow = document.getElementById('template-add-row');
-    if (addRow) {
-        addRow.style.display = 'none';
-        document.getElementById('template-add-name').value = '';
-        document.getElementById('template-add-value').value = '';
-    }
-}
-
-function confirmAddTemplateVariable() {
-    const nameSelect = document.getElementById('template-add-name');
-    const sourceSelect = document.getElementById('template-add-source');
-    const valueInput = document.getElementById('template-add-value');
-    if (!nameSelect || !sourceSelect || !valueInput || !nameSelect.value) return;
-    
-    const [name, type] = nameSelect.value.split(':');
-    vscode.postMessage({
-        command: 'addVariableToConfig',
-        name: name,
-        type: type,
-        source: sourceSelect.value,
-        value: valueInput.value
-    });
-    
-    hideTemplateVariableAddRow();
 }
 
 function changeTemplateVariableSource(name, source) {
@@ -2522,103 +2067,6 @@ function deleteTemplateVariable(name) {
         message: 'Delete variable $' + name + '?',
         deleteCommand: 'deleteVariable',
         name: name
-    });
-}
-
-function changeTemplatePropertySource(objectName, propertyName, source) {
-    vscode.postMessage({
-        command: 'changeTemplatePropertySource',
-        objectName: objectName,
-        propertyName: propertyName,
-        source: source
-    });
-}
-
-function saveTemplatePropertyValue(objectName, propertyName, value) {
-    vscode.postMessage({
-        command: 'saveProperty',
-        objectName: objectName,
-        propertyName: propertyName,
-        value: value
-    });
-}
-
-function deleteTemplateProperty(objectName, propertyName) {
-    vscode.postMessage({
-        command: 'requestDeleteConfirm',
-        message: 'Delete property $' + objectName + '.' + propertyName + '?',
-        deleteCommand: 'deleteProperty',
-        objectName: objectName,
-        propertyName: propertyName
-    });
-}
-
-function changeTemplateMethodSource(objectName, methodName, source) {
-    vscode.postMessage({
-        command: 'changeTemplateMethodSource',
-        objectName: objectName,
-        methodName: methodName,
-        source: source
-    });
-}
-
-function saveTemplateMethodImpl(objectName, methodName, implementation) {
-    vscode.postMessage({
-        command: 'saveMethod',
-        objectName: objectName,
-        methodName: methodName,
-        implementation: implementation
-    });
-}
-
-function deleteTemplateMethod(objectName, methodName) {
-    vscode.postMessage({
-        command: 'requestDeleteConfirm',
-        message: 'Delete method $' + objectName + '.' + methodName + '()?',
-        deleteCommand: 'deleteMethod',
-        objectName: objectName,
-        methodName: methodName
-    });
-}
-
-function showScenarioVariableAddRow() {
-    const addRow = document.getElementById('scenario-add-row');
-    if (addRow) {
-        addRow.style.display = '';
-        document.getElementById('scenario-add-name').focus();
-    }
-}
-
-function hideScenarioVariableAddRow() {
-    const addRow = document.getElementById('scenario-add-row');
-    if (addRow) {
-        addRow.style.display = 'none';
-        document.getElementById('scenario-add-name').value = '';
-        document.getElementById('scenario-add-value').value = '';
-    }
-}
-
-function confirmAddScenarioVariable() {
-    const nameSelect = document.getElementById('scenario-add-name');
-    const sourceSelect = document.getElementById('scenario-add-source');
-    const valueInput = document.getElementById('scenario-add-value');
-    if (!nameSelect || !sourceSelect || !valueInput || !nameSelect.value) return;
-    
-    vscode.postMessage({
-        command: 'addScenarioVariableWithSource',
-        name: nameSelect.value,
-        source: sourceSelect.value,
-        value: valueInput.value
-    });
-    
-    hideScenarioVariableAddRow();
-}
-
-function changeScenarioVariableSource(name, source) {
-    vscode.postMessage({
-        command: 'changeScenarioVariableSource',
-        name: name,
-        source: source
     });
 }
 

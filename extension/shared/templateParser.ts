@@ -46,13 +46,27 @@ export interface ConditionalBlock {
     branches: BranchCondition[];
 }
 
+export interface ContextItemProperty {
+    value: unknown;
+    lineNumber: number;
+    context: string;
+    inferredType?: InferredType;
+}
+
+export interface ContextItemMethod {
+    paramCount: number;
+    implementation?: string;
+    lineNumber: number;
+    context: string;
+}
+
 export interface ContextItem {
     name: string;
     type: 'variable' | 'object';
-    value?: any; // For simple variables
+    value?: unknown; // For simple variables
     inferredType?: InferredType; // For variables
-    properties?: Map<string, { value: any; lineNumber: number; context: string; inferredType?: InferredType }>;
-    methods?: Map<string, { paramCount: number; implementation?: string; lineNumber: number; context: string }>;
+    properties?: Map<string, ContextItemProperty>;
+    methods?: Map<string, ContextItemMethod>;
     lineNumber: number;
     context: string;
 }
@@ -116,14 +130,14 @@ export class TemplateParser {
     private static stripComments(content: string): string {
         // First, remove multi-line comments: #* ... *#
         // Replace the comment content with spaces to preserve positions
-        let cleaned = content.replace(/#\*([\s\S]*?)\*#/g, (match, p1, offset) => {
+        let cleaned = content.replace(/#\*([\s\S]*?)\*#/g, (match) => {
             // Replace all non-newline characters with spaces to preserve line structure
             return match.replace(/[^\r\n]/g, ' ');
         });
         
         // Remove single-line comments: ## ... (to end of line)
         // Replace everything after ## with spaces (preserving the newline)
-        cleaned = cleaned.replace(/##[^\r\n]*/g, (match, offset) => {
+        cleaned = cleaned.replace(/##[^\r\n]*/g, (match) => {
             return ' '.repeat(match.length);
         });
         
@@ -140,7 +154,7 @@ export class TemplateParser {
         
         // Match #set($variable = ...) patterns - captures base variable name
         // This handles: #set($var = ...), #set($var.prop = ...), #set($var[index] = ...)
-        const setPattern = /#set\s*\(\s*\$([a-zA-Z_][a-zA-Z0-9_]*)[\s.=\[]/g;
+        const setPattern = /#set\s*\(\s*\$([a-zA-Z_][a-zA-Z0-9_]*)[\s.=[]/g;
         
         let match;
         while ((match = setPattern.exec(cleanedContent)) !== null) {
@@ -262,7 +276,7 @@ export class TemplateParser {
             const objProperties = properties.filter(p => p.objectName === objName);
             const objMethods = methods.filter(m => m.objectName === objName);
             
-            const propertiesMap = new Map<string, any>();
+            const propertiesMap = new Map<string, ContextItemProperty>();
             objProperties.forEach(p => {
                 const propInferredType = TemplateParser.inferType(`${objName}.${p.propertyName}`, p.context, content);
                 propertiesMap.set(p.propertyName, {
@@ -273,7 +287,7 @@ export class TemplateParser {
                 });
             });
             
-            const methodsMap = new Map<string, any>();
+            const methodsMap = new Map<string, ContextItemMethod>();
             objMethods.forEach(m => {
                 methodsMap.set(m.methodName, {
                     paramCount: m.paramCount,

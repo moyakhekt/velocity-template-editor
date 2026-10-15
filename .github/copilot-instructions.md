@@ -27,6 +27,7 @@ A VS Code extension for editing Apache Velocity templates and previewing them wi
 ```bash
 npm run compile      # extension (esbuild)
 npm run build:java   # server jar (Maven)
+npm run lint         # ESLint
 npm test             # Jest
 npx @vscode/vsce ls  # what the .vsix will contain
 ```

@@ -10,6 +10,7 @@ import {
   getUrlSourceOptionsData,
 } from "./contextManagerServices";
 import { ContextData } from "./contextManager";
+import type { ScenarioData } from "../shared/types";
 import { TemplateParser, ContextItem } from "../shared/templateParser";
 import {
   SwitchScenarioCommand,
@@ -493,7 +494,7 @@ export class ScenarioService {
 
     const fileData = await this.deps.getTemplateContextFileData(currentTemplatePath);
     const activeScenarioName = fileData.activeScenario || "Default";
-    const activeScenario = fileData.scenarios?.[activeScenarioName] as any;
+    const activeScenario: ScenarioData | undefined = fileData.scenarios?.[activeScenarioName];
     if (!activeScenario) return;
 
     if (!activeScenario.variableSources) activeScenario.variableSources = {};
@@ -503,7 +504,7 @@ export class ScenarioService {
     if (source === "self") {
       const currentSrc = activeScenario.variableSources[name];
       if (currentSrc && currentSrc !== "self") {
-        const srcScenario = fileData.scenarios?.[currentSrc] as any;
+        const srcScenario: ScenarioData | undefined = fileData.scenarios?.[currentSrc];
         if (srcScenario) {
           const inheritedValue = (srcScenario.variables || {})[name];
           if (inheritedValue !== undefined) activeScenario.variables[name] = inheritedValue;
@@ -545,8 +546,8 @@ export class ScenarioService {
         .filter(([sn]) => sn !== activeScenario)
         .map(([sn, sc]) => ({
           name: sn,
-          variables: Object.keys((sc as any).variables || {}).filter((vn) => {
-            const src = ((sc as any).variableSources || {})[vn];
+          variables: Object.keys(sc.variables || {}).filter((vn) => {
+            const src = (sc.variableSources || {})[vn];
             return src === "self" || src === undefined;
           }),
         }));
@@ -603,7 +604,7 @@ export class ScenarioService {
     void this.deps.updateWebview(currentTemplatePath);
     this.deps.refreshPreviewIfOpen(currentTemplatePath);
     vscode.window.setStatusBarMessage(
-      `$(check) Variable \$${name} override: ${isOverride ? 'on' : 'off'}`, 2000,
+      `$(check) Variable $${name} override: ${isOverride ? 'on' : 'off'}`, 2000,
     );
   }
 

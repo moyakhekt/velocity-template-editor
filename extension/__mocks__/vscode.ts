@@ -8,39 +8,10 @@
  * because they're erased during compilation.
  */
 
-type Listener<T> = (e: T) => void;
-
 // Type alias intentionally — `interface Disposable` would merge with
 // TypeScript 5.2+'s built-in global `Disposable { [Symbol.dispose](): void }`,
 // silently making [Symbol.dispose] required. A type alias never merges.
 type MockDisposable = { dispose(): void };
-
-// ---------------------------------------------------------------------------
-// EventEmitter – used as base class of ContextState
-// ---------------------------------------------------------------------------
-class EventEmitter<T> {
-    // True ECMAScript private field — inaccessible at runtime (not just
-    // compile-time), unlike the `private` keyword.
-    #listeners: Array<Listener<T>> = [];
-
-    // VS Code exposes the subscribe function directly as the `event` property.
-    event = (listener: Listener<T>): MockDisposable => {
-        this.#listeners.push(listener);
-        const remove = () => {
-            const idx = this.#listeners.indexOf(listener);
-            if (idx >= 0) this.#listeners.splice(idx, 1);
-        };
-        return { dispose: remove };
-    };
-
-    fire(data: T): void {
-        for (const l of [...this.#listeners]) l(data);
-    }
-
-    dispose(): void {
-        this.#listeners.length = 0;
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Stubs for APIs that are called but whose return value tests don't inspect
@@ -103,7 +74,6 @@ const ViewColumn = { One: 1, Two: 2, Three: 3 } as const;
 // Export as a CommonJS-compatible module so that
 // `const vscode = require('vscode')` yields an object with all these keys.
 module.exports = {
-    EventEmitter,
     workspace,
     window: vsWindow,
     Uri,

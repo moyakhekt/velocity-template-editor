@@ -9,6 +9,7 @@
 .gitignore
 .yarnrc
 esbuild.js
+eslint.config.mjs
 jest.config.js
 strip-console-ast.js
 **/tsconfig.json

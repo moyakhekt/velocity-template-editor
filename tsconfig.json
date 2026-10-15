@@ -3,7 +3,7 @@
     "module": "commonjs",
     "target": "ES2020",
     "outDir": "out",
-    "lib": ["ES2020"],
+    "lib": ["ES2020", "DOM"],
     "sourceMap": true,
     "rootDir": "extension",
     "strict": true,
@@ -13,5 +13,5 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "exclude": ["node_modules", ".vscode-test", "src", "extension/__tests__", "extension/__mocks__", "_to_delete"]
+  "exclude": ["node_modules", ".vscode-test", "extension/__tests__", "extension/__mocks__"]
 }

@@ -6,6 +6,7 @@ import { randomBytes } from 'crypto';
 import * as readline from 'readline';
 import * as vscode from 'vscode';
 import { isDebugLogging } from '../shared/debugLogging';
+import type { RenderMethodMocks } from '../shared/renderInput';
 
 export class VelocityServerClient {
     // Must match server/pom.xml's <maven.compiler.release> — the jar's class
@@ -69,7 +70,15 @@ export class VelocityServerClient {
             });
 
             let startupOutput = '';
-            let startupTimer: ReturnType<typeof setTimeout> | undefined;
+            // Timeout if the ready handshake never arrives
+            const startupTimer = setTimeout(() => {
+                if (this.serverProcess && this.port === undefined) {
+                    reject(new Error(
+                        `Velocity server failed to start within 15 seconds.\n\nOutput:\n${startupOutput}`
+                    ));
+                    this.serverProcess.kill('SIGTERM');
+                }
+            }, 15000);
 
             // stdout is the handshake channel: the server writes {"event":"ready","port":N}
             // once it's listening. Anything else there (e.g. a mock calling print()) is just shown.
@@ -103,7 +112,7 @@ export class VelocityServerClient {
 
             this.serverProcess.on('error', (error) => {
                 
-                if ((error as any).code === 'ENOENT') {
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
                     reject(new Error(`Java not found. Please install Java ${VelocityServerClient.REQUIRED_JAVA_MAJOR} or higher and ensure it's in your PATH.`));
                 } else {
                     reject(error);
@@ -122,17 +131,7 @@ export class VelocityServerClient {
                 this.port = undefined;
                 this.startupPromise = null;
             });
-
-            // Timeout if the ready handshake never arrives
-            startupTimer = setTimeout(() => {
-                if (this.serverProcess && this.port === undefined) {
-                    reject(new Error(
-                        `Velocity server failed to start within 15 seconds.\n\nOutput:\n${startupOutput}`
-                    ));
-                    this.serverProcess.kill('SIGTERM');
-                }
-            }, 15000);
-        });
+});
 
         return this.startupPromise;
     }
@@ -269,8 +268,8 @@ export class VelocityServerClient {
 
     public async render(
         template: string,
-        variables: Record<string, any>,
-        methods: Record<string, any>,
+        variables: Record<string, unknown>,
+        methods: RenderMethodMocks,
         messagesPropertiesPaths?: string[],
         language?: string,
         variableMappings?: { localeVar?: string, templateMessagesVar?: string, escapeToolVar?: string }
@@ -351,14 +350,15 @@ export class VelocityServerClient {
         });
     }
 
-    private logRenderRequest(variables: Record<string, any>): void {
+    private logRenderRequest(variables: Record<string, unknown>): void {
         this.outputChannel.appendLine('=== Render Request Debug ===');
         this.outputChannel.appendLine(`Variables keys: ${Object.keys(variables).join(', ')}`);
         this.outputChannel.appendLine(`scenarioInfo in variables: ${'scenarioInfo' in variables}`);
         if ('scenarioInfo' in variables) {
             this.outputChannel.appendLine(`scenarioInfo value: ${JSON.stringify(variables.scenarioInfo, null, 2)}`);
         }
-        for (const [key, value] of Object.entries(variables)) {
+        for (const [key, raw] of Object.entries(variables)) {
+            const value = raw as { _httpServletRequest?: boolean; url?: string; headers?: string } | null;
             if (value && typeof value === 'object' && value._httpServletRequest) {
                 this.outputChannel.appendLine(`HttpServletRequest variable: ${key}`);
                 this.outputChannel.appendLine(`  URL: ${value.url}`);

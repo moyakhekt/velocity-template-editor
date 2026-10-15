@@ -30,12 +30,12 @@ extension/
     templateDataService.ts     Template variables and their values
     templateGroupService.ts    Template groups
     inputDialogService.ts      Input prompts
-    contextState.ts            Event-emitting state store (tested, not yet wired in)
   server/
     velocityServerClient.ts    Starts the Java server and calls it
     screenshotRunner.ts        Screenshot tests (playwright-core, system Chrome/Edge)
   shared/
     templateParser.ts          Static analysis of templates (variables, methods, params, branches)
+    renderInput.ts             Splits a render context into variables and method mocks
     messageTypes.ts            Webview ↔ extension message types and validation
     types.ts                   Context file types
     debugLogging.ts            The velocity.debugLogging switch
@@ -71,7 +71,7 @@ The services receive the manager as `IContextServices`, which keeps them indepen
 2. the active scenario's values merged over them;
 3. a request object (`{ _httpServletRequest: true, url, headers }`) if the template uses one.
 
-`preview.ts` splits these into plain variables and method mocks (objects whose members have `_implementation`), and calls `VelocityServerClient.render()` with them, the messages files, the language, and the tool variable names.
+`splitVariablesAndMocks` (`shared/renderInput.ts`) splits these into plain variables and method mocks (objects whose members have `_implementation`); `preview.ts` and the screenshot runner then call `VelocityServerClient.render()` with them, the messages files, the language, and the tool variable names.
 
 ## Preview
 
@@ -118,13 +118,14 @@ Press **F5** to start an Extension Development Host. In development mode `veloci
 
 Use **Velocity: Open Developer Tools** to inspect the Context Manager view.
 
-## Tests
+## Lint and tests
 
 ```bash
+npm run lint   # ESLint 9 (eslint.config.mjs): typescript-eslint for extension/, browser rules for webview-ui/
 npm test
 ```
 
-Jest, with `vscode` mocked by `extension/__mocks__/vscode.ts`. The suites cover the template parser, message validation, scenario helpers, `ContextState`, and the preview server's security checks (which start the real server).
+Jest, with `vscode` mocked by `extension/__mocks__/vscode.ts`. The suites cover the template parser, message validation, scenario and render helpers (including the variable/mock split), and the preview server's security checks (which start the real server).
 
 ## Packaging
 

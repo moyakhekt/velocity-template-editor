@@ -14,8 +14,6 @@ import {
   getScenarioHeadersData,
   getScenarioVariablesData,
 } from "./contextManagerServices";
-import type { UrlSourceOption } from "../shared/messageTypes";
-import { get } from "node:http";
 
 export class ContextWebviewRenderer {
   private readonly fileCache = new Map<string, string>();
@@ -31,7 +29,6 @@ export class ContextWebviewRenderer {
     contextData: ContextData,
     contextItems: Map<string, ContextItem>,
     templateName: string,
-    parseError?: string,
   ): Promise<string> {
     const items = Array.from(contextItems.values());
     const nonce = this.getNonce();
@@ -112,9 +109,7 @@ export class ContextWebviewRenderer {
       const activeScenario = templateData.activeScenario || "Default";
       const scenarios = templateData.scenarios || { Default: {} };
 
-      const urlInfo = getUrlWithSource(activeScenario, templateData);
-
-      const mappings = await this.resolveTemplateMappings(items, fullPath, templateData);
+      const mappings= await this.resolveTemplateMappings(items, fullPath, templateData);
       const templateFileName = path.basename(fullPath);
 
       let foreachLoopVars: Set<string> = new Set();
@@ -453,10 +448,9 @@ export class ContextWebviewRenderer {
       .join("");
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private generateScenarioUrlTableHtml(
     activeScenario: string,
-    scenarios: Record<string, any>,
+    scenarios: ScenariosData,
     templateData: ContextFileData,
   ): string {
     const urlInfo = getUrlWithSource(activeScenario, templateData);
@@ -505,10 +499,9 @@ export class ContextWebviewRenderer {
       .join("");
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private generateScenariosConfigSection(
     activeScenario: string,
-    scenarios: Record<string, any>,
+    scenarios: ScenariosData,
     templateData: ContextFileData,
     contextData: ContextData,
     items: ContextItem[],
@@ -704,7 +697,7 @@ export class ContextWebviewRenderer {
 
       return `
         <tr data-variable-name="${escapedName}">
-            <td class="var-name-cell">\$${escapedName}</td>
+            <td class="var-name-cell">$${escapedName}</td>
             ${valueCell}
             <td class="var-th-center">
                 <input type="checkbox" title="${isJsonEditable ? 'Parse as JSON object/array' : 'Inherited from Default (read-only)'}"
@@ -761,156 +754,6 @@ export class ContextWebviewRenderer {
       } else {
         return `<td><span class="var-value-inherited">${escapedParentValue || '(empty)'}</span></td>`;
       }
-  }
-
-  private generateTemplateVariableHtml(
-    item: ContextItem,
-    contextData: ContextData,
-  ): string {
-    const hasLocalValue = contextData[item.name] !== undefined;
-    const environmentValue = this.deps.getEnvironmentContext().data[item.name];
-    const hasEnvironmentValue = environmentValue !== undefined;
-
-    const source = hasLocalValue
-      ? "template"
-      : hasEnvironmentValue
-        ? "environment"
-        : "template";
-    const displayValue = hasLocalValue ? contextData[item.name] : environmentValue;
-    const valueStr =
-      displayValue !== undefined
-        ? typeof displayValue === "string"
-          ? displayValue
-          : JSON.stringify(displayValue)
-        : "";
-
-    return `
-            <div class="context-item">
-                <div class="item-header">
-                    <div class="item-name">\$${this.escapeHtml(item.name)}</div>
-                    <div class="item-controls">
-                        <select class="source-select" data-action="setVariableSource" data-name="${this.escapeHtml(item.name)}">
-                            <option value="template" ${source === "template" ? "selected" : ""}>Template</option>
-                            <option value="environment" ${source === "environment" ? "selected" : ""}>Environment</option>
-                        </select>
-                        <button class="delete" data-action="deleteItem" data-type="variable" data-name="${this.escapeHtml(item.name)}" title="Delete">🗑</button>
-                    </div>
-                </div>
-                ${
-                  source === "template" || !hasEnvironmentValue
-                    ? `
-                    <input id="input-${this.escapeHtml(item.name)}" value="${this.escapeHtml(valueStr)}" placeholder="Enter value (JSON format)" data-action="saveValue" data-name="${this.escapeHtml(item.name)}" data-object="" data-prop="" />
-                `
-                    : `
-                    <div class="value-display readonly">${this.escapeHtml(valueStr)}</div>
-                `
-                }
-            </div>
-        `;
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private generateObjectPropertiesHtml(
-    item: ContextItem,
-    objectData: Record<string, any>,
-    environmentData: Record<string, any>,
-  ): string {
-    if (!item.properties || item.properties.size === 0) {
-      return "";
-    }
-    let html = "";
-    item.properties.forEach((propData, propName) => {
-      const hasLocal = objectData[propName] !== undefined;
-      const environmentVal = environmentData[propName];
-      const hasEnvironment = environmentVal !== undefined;
-      const source = hasLocal ? "template" : hasEnvironment ? "environment" : "template";
-      const val = hasLocal ? objectData[propName] : environmentVal;
-      const valStr =
-        val !== undefined ? (typeof val === "string" ? val : JSON.stringify(val)) : "";
-
-      html += `
-                    <div class="nested-item">
-                        <div class="nested-header">
-                            <div class="nested-name">.${this.escapeHtml(propName)}</div>
-                            <div class="item-controls">
-                                <select class="source-select" data-action="setPropertySource" data-object="${this.escapeHtml(item.name)}" data-prop="${this.escapeHtml(propName)}">
-                                    <option value="template" ${source === "template" ? "selected" : ""}>Template</option>
-                                    <option value="environment" ${source === "environment" ? "selected" : ""}>Environment</option>
-                                </select>
-                                <button class="delete" data-action="deleteItem" data-type="property" data-object="${this.escapeHtml(item.name)}" data-prop="${this.escapeHtml(propName)}" title="Delete">🗑</button>
-                            </div>
-                        </div>
-                        ${
-                          source === "template" || !hasEnvironment
-                            ? `<input id="input-${this.escapeHtml(item.name)}-${this.escapeHtml(propName)}" value="${this.escapeHtml(valStr)}" placeholder="Enter value" data-action="saveValue" data-name="" data-object="${this.escapeHtml(item.name)}" data-prop="${this.escapeHtml(propName)}" />`
-                            : `<div class="value-display readonly">${this.escapeHtml(valStr)}</div>`
-                        }
-                    </div>
-                `;
-    });
-    return html;
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private generateObjectMethodsHtml(
-    item: ContextItem,
-    objectData: Record<string, any>,
-    environmentData: Record<string, any>,
-  ): string {
-    if (!item.methods || item.methods.size === 0) {
-      return "";
-    }
-    let html = "";
-    item.methods.forEach((methodData, methodName) => {
-      const localMethod = objectData[methodName];
-      const hasLocal = localMethod?._implementation;
-      const environmentMethod = environmentData[methodName];
-      const hasEnvironment = environmentMethod?._implementation;
-      const source = hasLocal ? "template" : hasEnvironment ? "environment" : "template";
-      const impl = hasLocal
-        ? localMethod._implementation
-        : hasEnvironment
-          ? environmentMethod._implementation
-          : "";
-
-      html += `
-                    <div class="nested-item">
-                        <div class="nested-header">
-                            <div class="nested-name">.${this.escapeHtml(methodName)}()</div>
-                            <div class="item-controls">
-                                <select class="source-select" data-action="setMethodSource" data-object="${this.escapeHtml(item.name)}" data-method="${this.escapeHtml(methodName)}">
-                                    <option value="template" ${source === "template" ? "selected" : ""}>Template</option>
-                                    <option value="environment" ${source === "environment" ? "selected" : ""}>Environment</option>
-                                </select>
-                                <button class="delete" data-action="deleteItem" data-type="method" data-object="${this.escapeHtml(item.name)}" data-method="${this.escapeHtml(methodName)}" title="Delete">🗑</button>
-                            </div>
-                        </div>
-                        ${
-                          source === "template" || !hasEnvironment
-                            ? `<textarea id="method-${this.escapeHtml(item.name)}-${this.escapeHtml(methodName)}" placeholder="Enter implementation (use args[0], args[1], etc.)" data-action="saveMethod" data-object="${this.escapeHtml(item.name)}" data-method="${this.escapeHtml(methodName)}">${this.escapeHtml(impl)}</textarea>`
-                            : `<div class="value-display readonly">${this.escapeHtml(impl)}</div>`
-                        }
-                    </div>
-                `;
-    });
-    return html;
-  }
-
-  private generateTemplateObjectHtml(
-    item: ContextItem,
-    contextData: ContextData,
-  ): string {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const objectData = ((contextData as Record<string, any>)[item.name] || {}) as Record<string, any>;
-    const environmentData =
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (this.deps.getEnvironmentContext().data[item.name] as Record<string, any>) || {};
-
-    let html = `<div class="context-item"><div class="item-header"><div class="item-name">\$${this.escapeHtml(item.name)}</div></div>`;
-    html += this.generateObjectPropertiesHtml(item, objectData, environmentData);
-    html += this.generateObjectMethodsHtml(item, objectData, environmentData);
-    html += `</div>`;
-    return html;
   }
 
   // -------------------------------------------------------------------------
@@ -1606,12 +1449,4 @@ export class ContextWebviewRenderer {
     return text.replace(/[&<>"']/g, (m) => map[m]);
   }
 
-  private escapeJs(text: string): string {
-    return text
-      .replace(/\\/g, String.raw`\\`)
-      .replace(/'/g, String.raw`\'`)
-      .replace(/"/g, String.raw`\"`)
-      .replace(/\n/g, String.raw`\n`)
-      .replace(/\r/g, String.raw`\r`);
-  }
 }
