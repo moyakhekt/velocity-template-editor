@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { IContextServices } from "./contextManagerServices";
 import {
   SaveEnvironmentVariableCommand,
@@ -31,88 +32,151 @@ export class EnvironmentContextService {
   // ---------------------------------------------------------------------------
 
   async handleloadEnvironmentContext(currentTemplatePath: string): Promise<void> {
-    const loadFile = await vscode.window.showOpenDialog({
-      canSelectFiles: true,
-      canSelectFolders: false,
-      canSelectMany: false,
-      filters: { JSON: ["json"] },
-      title: "Load Environment Context File",
-    });
-    if (loadFile?.[0]) {
-      try {
-        const content = await fs.promises.readFile(loadFile[0].fsPath, "utf8");
-        const parsed = JSON.parse(content);
-        this.deps.setEnvironmentContext({
-          filePath: loadFile[0].fsPath,
-          messagesPropertiesPath: parsed.messagesPropertiesPath || undefined,
-          messagesPropertiesPaths: parsed.messagesPropertiesPaths || undefined,
-          language: parsed.language || undefined,
-          headers: parsed.headers || {},
-          cspDirectives: parsed.cspDirectives || {},
-          mockFunctions: parsed.mockFunctions || {},
-          data: parsed.context || parsed.data || {},
-          templates: parsed.templates || {},
-        });
-
-        const duplicateVars = this.findDuplicateVariableNames(
-          this.deps.getEnvironmentContext().data,
+    const contextFilePath = await this.promptForContextFilePath(
+      path.dirname(currentTemplatePath),
+      "Load Environment Context File",
+    );
+    if (!contextFilePath) { return; }
+    try {
+      if (!fs.existsSync(contextFilePath)) {
+        // User typed a context file path that doesn't exist yet. Confirm
+        // before creating it as a fresh, empty environment context.
+        const confirmation = await vscode.window.showWarningMessage(
+          `"${path.basename(contextFilePath)}" does not exist. Create it as a new environment context file?`,
+          { modal: true },
+          "Create File",
         );
-        if (duplicateVars.length > 0) {
-          vscode.window
-            .showErrorMessage(
-              `Environment context contains duplicate variable names: ${duplicateVars.join(", ")}. Please edit the file to resolve duplicates.`,
-              "Open File",
-            )
-            .then((selection) => {
-              if (selection === "Open File") {
-                vscode.workspace
-                  .openTextDocument(loadFile[0].fsPath)
-                  .then((doc) => { vscode.window.showTextDocument(doc); });
-              }
-            });
+        if (confirmation !== "Create File") {
+          return;
         }
-
-        const duplicateMocks = this.findDuplicateMockFunctionNames(
-          this.deps.getEnvironmentContext().mockFunctions || {},
+        await fs.promises.mkdir(path.dirname(contextFilePath), { recursive: true });
+        const defaultContext = {
+          headers: {},
+          cspDirectives: {},
+          context: {},
+          mockFunctions: {},
+          templates: {},
+        };
+        await fs.promises.writeFile(
+          contextFilePath,
+          JSON.stringify(defaultContext, null, 2),
+          "utf8",
         );
-        if (duplicateMocks.length > 0) {
-          vscode.window
-            .showErrorMessage(
-              `Environment context contains duplicate mock function names: ${duplicateMocks.join(", ")}. Please edit the file to resolve duplicates.`,
-              "Open File",
-            )
-            .then((selection) => {
-              if (selection === "Open File") {
-                vscode.workspace
-                  .openTextDocument(loadFile[0].fsPath)
-                  .then((doc) => { vscode.window.showTextDocument(doc); });
-              }
-            });
-        }
-
-        this.deps.setEnvironmentContextLoaded(true);
-        await this.deps.context.globalState.update(
-          "environmentContextPath",
-          loadFile[0].fsPath,
+        vscode.window.showInformationMessage(
+          `Created new environment context: ${path.basename(contextFilePath)}`,
         );
-        void this.deps.updateWebview(currentTemplatePath);
-        vscode.window.setStatusBarMessage("$(check) Environment context loaded", 3000);
-      } catch (e) {
-        const errorMsg = e instanceof Error ? e.message : String(e);
+      }
+      const content = await fs.promises.readFile(contextFilePath, "utf8");
+      const parsed = JSON.parse(content);
+      this.deps.setEnvironmentContext({
+        filePath: contextFilePath,
+        messagesPropertiesPath: parsed.messagesPropertiesPath || undefined,
+        messagesPropertiesPaths: parsed.messagesPropertiesPaths || undefined,
+        language: parsed.language || undefined,
+        headers: parsed.headers || {},
+        cspDirectives: parsed.cspDirectives || {},
+        mockFunctions: parsed.mockFunctions || {},
+        data: parsed.context || parsed.data || {},
+        templates: parsed.templates || {},
+        templateGroups: parsed.templateGroups || {},
+      });
+
+      const duplicateVars = this.findDuplicateVariableNames(
+        this.deps.getEnvironmentContext().data,
+      );
+      if (duplicateVars.length > 0) {
         vscode.window
           .showErrorMessage(
-            `Failed to Load Environment Context File: ${errorMsg}`,
+            `Environment context contains duplicate variable names: ${duplicateVars.join(", ")}. Please edit the file to resolve duplicates.`,
             "Open File",
           )
           .then((selection) => {
             if (selection === "Open File") {
               vscode.workspace
-                .openTextDocument(loadFile[0].fsPath)
+                .openTextDocument(contextFilePath)
                 .then((doc) => { vscode.window.showTextDocument(doc); });
             }
           });
       }
+
+      const duplicateMocks = this.findDuplicateMockFunctionNames(
+        this.deps.getEnvironmentContext().mockFunctions || {},
+      );
+      if (duplicateMocks.length > 0) {
+        vscode.window
+          .showErrorMessage(
+            `Environment context contains duplicate mock function names: ${duplicateMocks.join(", ")}. Please edit the file to resolve duplicates.`,
+            "Open File",
+          )
+          .then((selection) => {
+            if (selection === "Open File") {
+              vscode.workspace
+                .openTextDocument(contextFilePath)
+                .then((doc) => { vscode.window.showTextDocument(doc); });
+            }
+          });
+      }
+
+      this.deps.setEnvironmentContextLoaded(true);
+      await this.deps.context.globalState.update(
+        "environmentContextPath",
+        contextFilePath,
+      );
+      void this.deps.updateWebview(currentTemplatePath);
+      vscode.window.setStatusBarMessage("$(check) Environment context loaded", 3000);
+    } catch (e) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      vscode.window
+        .showErrorMessage(
+          `Failed to Load Environment Context File: ${errorMsg}`,
+          "Open File",
+        )
+        .then((selection) => {
+          if (selection === "Open File") {
+            vscode.workspace
+              .openTextDocument(contextFilePath)
+              .then((doc) => { vscode.window.showTextDocument(doc); });
+          }
+        });
     }
+  }
+
+  /**
+   * Prompts the user to specify an environment context file path, either by
+   * browsing to an existing file or by typing a path directly. Native OS
+   * "Open" dialogs refuse to return a path that doesn't exist, so typing is
+   * offered as a separate option to support creating a new context file
+   * from a typed filename.
+   */
+  private async promptForContextFilePath(defaultDir: string, dialogTitle: string): Promise<string | undefined> {
+    const choice = await vscode.window.showQuickPick(
+      [
+        { label: "$(folder-opened) Browse for existing file...", action: "browse" as const },
+        { label: "$(edit) Type a file path...", action: "type" as const },
+      ],
+      { title: dialogTitle, placeHolder: "Choose how to specify the environment context file", ignoreFocusOut: true },
+    );
+    if (!choice) { return undefined; }
+
+    if (choice.action === "browse") {
+      const openUri = await vscode.window.showOpenDialog({
+        defaultUri: vscode.Uri.file(defaultDir),
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: { JSON: ["json"] },
+        title: dialogTitle,
+      });
+      return openUri?.[0]?.fsPath;
+    }
+
+    const typed = await vscode.window.showInputBox({
+      title: dialogTitle,
+      prompt: "Enter the path to an environment context file (it will be created if it does not exist)",
+      value: path.join(defaultDir, "environment-context.json"),
+      ignoreFocusOut: true,
+    });
+    return typed?.trim() || undefined;
   }
 
   async parseAndAssignEnvironmentContext(filePath: string): Promise<void> {
@@ -125,6 +189,7 @@ export class EnvironmentContextService {
       mockFunctions: parsed.mockFunctions || {},
       data: parsed.context || parsed.data || {},
       templates: parsed.templates || {},
+      templateGroups: parsed.templateGroups || {},
     });
 
     const duplicateVars = this.findDuplicateVariableNames(

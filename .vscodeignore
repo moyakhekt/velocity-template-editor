@@ -1,10 +1,40 @@
+# What ships: out/ (bundled extension, webview UI, codicons), media/ (logos, icons),
+# syntaxes/ (grammar, language configuration), the server jar, playwright-core
+# (production dependency), README.md, CHANGELOG.md, LICENSE and package.json. Check with `npx @vscode/vsce ls`.
+
+# Editor, CI and tooling config
 .vscode/**
 .vscode-test/**
-extension/**
+.github/**
 .gitignore
 .yarnrc
 esbuild.js
+jest.config.js
+strip-console-ast.js
 **/tsconfig.json
+**/tsconfig.*.json
 **/.eslintrc.json
-**/*.map
+package-lock.json
+
+# Sources (bundled into out/ by esbuild.js, or built into the jar)
+extension/**
+src/**
+webview-ui/**
 **/*.ts
+**/*.map
+
+# Java server: only the runnable (shaded) jar. server/bin is Eclipse output;
+# original-*.jar is the unshaded jar the shade plugin leaves beside it
+server/**
+!server/target/velocity-server-1.0.0.jar
+
+# Documentation (docs/ is linked from README.md on GitHub)
+docs/**
+**/README.md
+!README.md
+
+# Leftovers
+**/*.backup
+**/*.backup2
+**/*.backup-*
+**/*.log

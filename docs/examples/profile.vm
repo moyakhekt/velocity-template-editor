@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>$user.name - Profile</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .card { border: 1px solid #ddd; border-radius: 6px; padding: 16px 20px; max-width: 480px; }
+        li { padding: 4px 0; }
+    </style>
+</head>
+<body>
+    ## Line comment: not rendered
+    <div class="card">
+        <h1>Welcome, $user.name!</h1>
+
+        #if($user.isPremium)
+            <p>⭐ Premium member</p>
+        #else
+            <p>Standard member</p>
+        #end
+
+        ## A mocked method (see "user" in the environment variables)
+        <p>Email: $user.getEmail()</p>
+        <p>Points: $user.points</p>
+
+        #set($rank = "Bronze")
+        #if($user.points > 1000)
+            #set($rank = "Gold")
+        #elseif($user.points > 500)
+            #set($rank = "Silver")
+        #end
+        <p>Rank: $rank</p>
+
+        <h2>Recent activity</h2>
+        <ul>
+        #foreach($activity in $activities)
+            <li>$activity.title#if($activity.done) ✓#end</li>
+        #end
+        </ul>
+
+        ## $! renders nothing when a value is missing
+        <p>$!footerNote</p>
+    </div>
+
+    #*
+       Block comment: also not rendered
+    *#
+    <footer>$siteName</footer>
+</body>
+</html>

@@ -1,13 +1,24 @@
 import * as http from 'http';
 import * as path from 'path';
 import * as fs from 'fs';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, spawnSync, ChildProcess } from 'child_process';
+import { randomBytes } from 'crypto';
+import * as readline from 'readline';
 import * as vscode from 'vscode';
+import { isDebugLogging } from '../shared/debugLogging';
 
 export class VelocityServerClient {
+    // Must match server/pom.xml's <maven.compiler.release> — the jar's class
+    // files won't load on an older JVM.
+    private static readonly REQUIRED_JAVA_MAJOR = 17;
+
     private static instance: VelocityServerClient | undefined;
     private serverProcess: ChildProcess | null = null;
-    private readonly port = 9876;
+    // Picked by the server (a free loopback port) and read from its startup output
+    private port: number | undefined;
+    // Shared secret the server requires on every request, so only this extension can use it
+    private readonly token = randomBytes(32).toString('hex');
+    private static readonly HOST = '127.0.0.1';
     private readonly jarPath: string;
     private startupPromise: Promise<void> | null = null;
     private isShuttingDown = false;
@@ -43,78 +54,196 @@ export class VelocityServerClient {
         }
 
         this.startupPromise = new Promise((resolve, reject) => {
-            
-            // Check for Java
-            const javaCmd = process.platform === 'win32' ? 'java.exe' : 'java';
-            
-            this.serverProcess = spawn(javaCmd, ['-jar', this.jarPath], {
+
+            // Find a Java runtime new enough to load the jar (PATH's default
+            // `java` may resolve to an older JDK even when a suitable one is installed).
+            const javaCmd = this.resolveJavaExecutable();
+
+            // The token goes in the environment, not the command line, which other local users can see
+            // Server debug logging is fixed for the life of the process (restart to change it)
+            const args = isDebugLogging() ? ['-Dvelocity.logLevel=debug', '-jar', this.jarPath] : ['-jar', this.jarPath];
+            this.serverProcess = spawn(javaCmd, args, {
                 cwd: path.dirname(this.jarPath),
-                stdio: ['ignore', 'pipe', 'pipe']
+                stdio: ['ignore', 'pipe', 'pipe'],
+                env: { ...process.env, VELOCITY_SERVER_TOKEN: this.token }
             });
 
             let startupOutput = '';
+            let startupTimer: ReturnType<typeof setTimeout> | undefined;
 
-            this.serverProcess.stdout?.on('data', (data) => {
-                const message = data.toString();
-                startupOutput += message;
-                this.outputChannel.appendLine(message.trim());
-                
-                if (startupOutput.includes('started on port')) {
-                    this.outputChannel.appendLine('✅ Velocity server started successfully');
+            // stdout is the handshake channel: the server writes {"event":"ready","port":N}
+            // once it's listening. Anything else there (e.g. a mock calling print()) is just shown.
+            readline.createInterface({ input: this.serverProcess.stdout! }).on('line', (line) => {
+                const ready = VelocityServerClient.parseReadyEvent(line);
+                if (ready && this.port === undefined) {
+                    this.port = ready.port;
+                    this.outputChannel.appendLine(`✅ Velocity server started on port ${ready.port}`);
+                    clearTimeout(startupTimer);
                     resolve();
+                } else if (!ready) {
+                    this.outputChannel.appendLine(line);
                 }
             });
 
-            this.serverProcess.stderr?.on('data', (data) => {
-                const message = data.toString();
-                this.outputChannel.appendLine('[ERROR] ' + message.trim());
-                
+            // stderr carries the server's logs (and JVM errors)
+            readline.createInterface({ input: this.serverProcess.stderr! }).on('line', (message) => {
+                if (this.port === undefined) {
+                    startupOutput += message + '\n';
+                }
+                this.outputChannel.appendLine(message);
+
                 // Check for common errors
-                if (message.includes('Address already in use')) {
-                    reject(new Error(`Port ${this.port} is already in use. Is another Velocity server running?`));
+                if (message.includes('UnsupportedClassVersionError')) {
+                    reject(new Error(
+                        `The Velocity server jar was built for Java ${VelocityServerClient.REQUIRED_JAVA_MAJOR}, but no Java ${VelocityServerClient.REQUIRED_JAVA_MAJOR}+ runtime was found. ` +
+                        `Install a JDK ${VelocityServerClient.REQUIRED_JAVA_MAJOR}+ (e.g. Eclipse Temurin) or point JAVA_HOME at one.`
+                    ));
                 }
             });
 
             this.serverProcess.on('error', (error) => {
                 
                 if ((error as any).code === 'ENOENT') {
-                    reject(new Error('Java not found. Please install Java 11 or higher and ensure it\'s in your PATH.'));
+                    reject(new Error(`Java not found. Please install Java ${VelocityServerClient.REQUIRED_JAVA_MAJOR} or higher and ensure it's in your PATH.`));
                 } else {
                     reject(error);
                 }
             });
 
             this.serverProcess.on('exit', (code, signal) => {
-                if (!this.isShuttingDown) {
+                clearTimeout(startupTimer);
+                if (this.port === undefined) {
+                    // Exited before the handshake: fail now rather than at the timeout
+                    reject(new Error(
+                        `Velocity server exited before it was ready (${signal ?? `exit code ${code}`}).\n\nOutput:\n${startupOutput}`
+                    ));
                 }
                 this.serverProcess = null;
+                this.port = undefined;
                 this.startupPromise = null;
             });
 
-            // Timeout if server doesn't start
-            setTimeout(() => {
-                if (!this.serverProcess) {
-                    return;
+            // Timeout if the ready handshake never arrives
+            startupTimer = setTimeout(() => {
+                if (this.serverProcess && this.port === undefined) {
+                    reject(new Error(
+                        `Velocity server failed to start within 15 seconds.\n\nOutput:\n${startupOutput}`
+                    ));
+                    this.serverProcess.kill('SIGTERM');
                 }
-                
-                this.isRunning().then(running => {
-                    if (!running) {
-                        const error = new Error(
-                            `Velocity server failed to start within 15 seconds.\n\nOutput:\n${startupOutput}`
-                        );
-                        reject(error);
-                        this.stop();
-                    }
-                });
             }, 15000);
         });
 
         return this.startupPromise;
     }
 
+    /** The server's ready handshake on stdout: {"event":"ready","port":N}. */
+    private static parseReadyEvent(line: string): { port: number } | undefined {
+        try {
+            const event = JSON.parse(line);
+            if (event?.event === 'ready' && Number.isInteger(event.port) && event.port > 0) {
+                return { port: event.port };
+            }
+        } catch {
+            // Not JSON: ordinary output
+        }
+        return undefined;
+    }
+
+    // Resolves a `java` executable that satisfies REQUIRED_JAVA_MAJOR, checking
+    // JAVA_HOME, then well-known JDK install locations, then falling back to
+    // whatever `java` resolves to on PATH.
+    private resolveJavaExecutable(): string {
+        const exeName = process.platform === 'win32' ? 'java.exe' : 'java';
+        const candidates: string[] = [];
+
+        if (process.env.JAVA_HOME) {
+            candidates.push(path.join(process.env.JAVA_HOME, 'bin', exeName));
+        }
+
+        const searchRoots: string[] = [];
+        if (process.platform === 'win32') {
+            for (const base of [process.env['ProgramFiles'], process.env['ProgramFiles(x86)']]) {
+                if (!base) {
+                    continue;
+                }
+                searchRoots.push(path.join(base, 'Eclipse Adoptium'));
+                searchRoots.push(path.join(base, 'Java'));
+                searchRoots.push(path.join(base, 'Microsoft', 'jdk'));
+            }
+        } else if (process.platform === 'darwin') {
+            searchRoots.push('/Library/Java/JavaVirtualMachines');
+        } else {
+            searchRoots.push('/usr/lib/jvm');
+        }
+
+        for (const root of searchRoots) {
+            let entries: string[] = [];
+            try {
+                entries = fs.readdirSync(root);
+            } catch {
+                continue;
+            }
+            for (const entry of entries) {
+                const binDir = process.platform === 'darwin'
+                    ? path.join(root, entry, 'Contents', 'Home', 'bin')
+                    : path.join(root, entry, 'bin');
+                candidates.push(path.join(binDir, exeName));
+            }
+        }
+
+        // Last resort: rely on PATH.
+        candidates.push(exeName);
+
+        let best: { exe: string, major: number } | undefined;
+        for (const candidate of candidates) {
+            const major = this.getJavaMajorVersion(candidate);
+            if (major !== undefined && major >= VelocityServerClient.REQUIRED_JAVA_MAJOR) {
+                if (!best || major > best.major) {
+                    best = { exe: candidate, major };
+                }
+            }
+        }
+
+        if (best) {
+            this.outputChannel.appendLine(`Using Java ${best.major} runtime: ${best.exe}`);
+            return best.exe;
+        }
+
+        // Nothing found that satisfies the requirement — fall back to PATH
+        // java so the process still spawns and reports a real error
+        // (ENOENT or UnsupportedClassVersionError) that the caller can surface.
+        return exeName;
+    }
+
+    private getJavaMajorVersion(javaExe: string): number | undefined {
+        try {
+            const result = spawnSync(javaExe, ['-version'], { encoding: 'utf-8' });
+            if (result.error || result.status !== 0) {
+                return undefined;
+            }
+            const output = `${result.stdout || ''}${result.stderr || ''}`;
+            const match = output.match(/version "(\d+)(?:\.\d+)?/);
+            if (!match) {
+                return undefined;
+            }
+            const major = parseInt(match[1], 10);
+            return major === 1 ? 8 : major; // Legacy "1.8.0_xxx" style versioning
+        } catch {
+            return undefined;
+        }
+    }
+
+    private get authHeaders(): http.OutgoingHttpHeaders {
+        return { 'X-Velocity-Token': this.token };
+    }
+
     public async isRunning(): Promise<boolean> {
+        if (this.port === undefined) {
+            return false;
+        }
         return new Promise((resolve) => {
-            const req = http.get(`http://localhost:${this.port}/health`, (res) => {
+            const req = http.get({ hostname: VelocityServerClient.HOST, port: this.port, path: '/health', headers: this.authHeaders }, (res) => {
                 let data = '';
                 res.on('data', chunk => data += chunk);
                 res.on('end', () => {
@@ -151,20 +280,9 @@ export class VelocityServerClient {
         }
 
         // Debug: Log HttpServletRequest variables
-        this.outputChannel.appendLine('=== Render Request Debug ===');
-        this.outputChannel.appendLine(`Variables keys: ${Object.keys(variables).join(', ')}`);
-        this.outputChannel.appendLine(`scenarioInfo in variables: ${'scenarioInfo' in variables}`);
-        if ('scenarioInfo' in variables) {
-            this.outputChannel.appendLine(`scenarioInfo value: ${JSON.stringify(variables.scenarioInfo, null, 2)}`);
+        if (isDebugLogging()) {
+            this.logRenderRequest(variables);
         }
-        for (const [key, value] of Object.entries(variables)) {
-            if (value && typeof value === 'object' && value._httpServletRequest) {
-                this.outputChannel.appendLine(`HttpServletRequest variable: ${key}`);
-                this.outputChannel.appendLine(`  URL: ${value.url}`);
-                this.outputChannel.appendLine(`  Headers: ${value.headers || '(none)'}`);
-            }
-        }
-        this.outputChannel.appendLine('============================');
 
         return new Promise((resolve, reject) => {
             const postData = JSON.stringify({
@@ -179,11 +297,12 @@ export class VelocityServerClient {
             });
 
             const options = {
-                hostname: 'localhost',
+                hostname: VelocityServerClient.HOST,
                 port: this.port,
                 path: '/render',
                 method: 'POST',
                 headers: {
+                    ...this.authHeaders,
                     'Content-Type': 'application/json',
                     'Content-Length': Buffer.byteLength(postData)
                 }
@@ -232,6 +351,23 @@ export class VelocityServerClient {
         });
     }
 
+    private logRenderRequest(variables: Record<string, any>): void {
+        this.outputChannel.appendLine('=== Render Request Debug ===');
+        this.outputChannel.appendLine(`Variables keys: ${Object.keys(variables).join(', ')}`);
+        this.outputChannel.appendLine(`scenarioInfo in variables: ${'scenarioInfo' in variables}`);
+        if ('scenarioInfo' in variables) {
+            this.outputChannel.appendLine(`scenarioInfo value: ${JSON.stringify(variables.scenarioInfo, null, 2)}`);
+        }
+        for (const [key, value] of Object.entries(variables)) {
+            if (value && typeof value === 'object' && value._httpServletRequest) {
+                this.outputChannel.appendLine(`HttpServletRequest variable: ${key}`);
+                this.outputChannel.appendLine(`  URL: ${value.url}`);
+                this.outputChannel.appendLine(`  Headers: ${value.headers || '(none)'}`);
+            }
+        }
+        this.outputChannel.appendLine('============================');
+    }
+
     public async stop(): Promise<void> {
         this.isShuttingDown = true;
 
@@ -240,10 +376,11 @@ export class VelocityServerClient {
             if (await this.isRunning()) {
                 await new Promise<void>((resolve) => {
                     const req = http.request({
-                        hostname: 'localhost',
+                        hostname: VelocityServerClient.HOST,
                         port: this.port,
                         path: '/shutdown',
                         method: 'POST',
+                        headers: this.authHeaders,
                         timeout: 2000
                     }, (res) => {
                         res.on('data', () => {}); // Consume response
@@ -276,6 +413,7 @@ export class VelocityServerClient {
             this.outputChannel.appendLine(`[Server] Error during stop: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
             this.serverProcess = null;
+            this.port = undefined;
             this.startupPromise = null;
             this.isShuttingDown = false;
         }

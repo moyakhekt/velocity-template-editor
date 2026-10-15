@@ -85,7 +85,21 @@ export async function runScreenshots(
     const results: ScreenshotResult[] = [];
 
     const environmentContext = contextSource.getEnvironmentContext();
-    const templates = environmentContext.templates || {};
+    // Grouped templates share their group's scenarios; a group member's own
+    // entry in `templates` (if any) is ignored, matching ContextManager lookup.
+    const templates: Record<string, { scenarios?: Record<string, unknown> }> = {};
+    const groupMembers = new Set<string>();
+    for (const group of Object.values(environmentContext.templateGroups || {})) {
+        for (const member of group.templates || []) {
+            templates[member] = group;
+            groupMembers.add(member.replace(/\\/g, '/').toLowerCase());
+        }
+    }
+    for (const [templatePath, templateCtx] of Object.entries(environmentContext.templates || {})) {
+        if (!groupMembers.has(templatePath.replace(/\\/g, '/').toLowerCase())) {
+            templates[templatePath] = templateCtx;
+        }
+    }
 
     // Base dir for resolving relative template paths — prefer user-supplied templateRoot
     const contextFileDir = templateRoot ||

@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Configuration status="WARN">
     <Appenders>
-        <Console name="Console" target="SYSTEM_OUT">
+        <!-- stderr: stdout is reserved for the ready handshake read by the extension -->
+        <Console name="Console" target="SYSTEM_ERR">
             <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
         </Console>
     </Appenders>
@@ -9,7 +10,8 @@
         <Root level="info">
             <AppenderRef ref="Console"/>
         </Root>
-        <Logger name="com.vscode.velocity" level="debug" additivity="false">
+        <!-- -Dvelocity.logLevel=debug (the extension passes it when velocity.debugLogging is on) -->
+        <Logger name="com.moyakhekt.vscode.velocity" level="${sys:velocity.logLevel:-info}" additivity="false">
             <AppenderRef ref="Console"/>
         </Logger>
     </Loggers>

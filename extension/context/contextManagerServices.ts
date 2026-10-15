@@ -1,8 +1,9 @@
+import * as path from "node:path";
 import * as vscode from "vscode";
 import type { ContextData, ContextFileData } from "./contextManager";
 import type { EnvironmentContextConfig, ScenariosData, ScenarioData } from "../shared/types";
 import type { ScenarioHeaderItem, ScenarioVariableItem, UrlSourceOption } from "../shared/messageTypes";
-import type { InferredType } from "../shared/templateParser";
+import type { ContextItem, InferredType } from "../shared/templateParser";
 
 /**
  * Interface exposing the coordinator (ContextManager) capabilities to all service classes.
@@ -12,7 +13,7 @@ export interface IContextServices {
   // Readonly state
   readonly outputChannel: vscode.OutputChannel;
   readonly context: vscode.ExtensionContext;
-  readonly panel: vscode.WebviewPanel | undefined;
+  readonly view: vscode.WebviewView | undefined;
   readonly templateFilePath: string;
   readonly contextCache: Map<string, ContextFileData>;
 
@@ -39,6 +40,8 @@ export interface IContextServices {
   getContextFilePath(templatePath: string): string | undefined;
   getEmptyContextData(): ContextFileData;
   normalizeTemplatePath(templatePath: string): string;
+  findTemplateGroupName(templatePath: string): string | undefined;
+  detectHttpServletRequestVariable(templatePath: string): Promise<string | undefined>;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,56 +125,178 @@ export function getScenarioHeadersData(
 
 export function getScenarioVariablesData(
   scenario: ScenarioData,
-  contextData: ContextData,
-  allScenarios: ScenariosData = {},
-  activeScenarioName: string = "Default",
+  allScenarios: ScenariosData,
+  activeScenarioName: string,
+  envData: Record<string, unknown>,
+  templateItems: ContextItem[],
+  excludeNames: Set<string> = new Set(),
 ): ScenarioVariableItem[] {
-  const variableSources: Record<string, string> = scenario.variableSources || {};
-  const variableJsonFlags: Record<string, boolean> = scenario.variableJsonFlags || {};
-  const ownVars: Record<string, unknown> = scenario.variables || {};
+  const isDefault = activeScenarioName === 'Default';
+  const variableSources = scenario.variableSources ?? {};
+  const ownVars = scenario.variables ?? {};
+  const variableJsonFlags = scenario.variableJsonFlags ?? {};
 
+  const defaultScenario = allScenarios['Default'];
+  const defaultVars = defaultScenario?.variables ?? {};
+  const defaultJsonFlags = defaultScenario?.variableJsonFlags ?? {};
+
+  // Union of all known variable names
   const allVarNames = new Set<string>();
-  Object.keys(ownVars).forEach((n) => allVarNames.add(n));
-  Object.entries(variableSources).forEach(([n, src]) => {
-    if (src !== "self") allVarNames.add(n);
-  });
-  if (allVarNames.size === 0) {
-    Object.keys(contextData).forEach((name) => {
-      if (
-        !["url", "headers", "scenarios", "activeScenario", "httpServletRequestVar", "localeVar", "templateMessagesVar", "escapeToolVar"].includes(name)
-      ) {
-        allVarNames.add(name);
-      }
-    });
+  for (const item of templateItems) {
+    if (!excludeNames.has(item.name)) allVarNames.add(item.name);
+  }
+  if (isDefault) {
+    for (const name of Object.keys(envData)) {
+      if (!excludeNames.has(name)) allVarNames.add(name);
+    }
+  } else {
+    for (const name of Object.keys(defaultVars)) {
+      if (!excludeNames.has(name)) allVarNames.add(name);
+    }
+  }
+  for (const name of Object.keys(ownVars)) {
+    if (!excludeNames.has(name)) allVarNames.add(name);
+  }
+  for (const name of Object.keys(variableSources)) {
+    if (!excludeNames.has(name)) allVarNames.add(name);
   }
 
-  return Array.from(allVarNames).map((name) => {
-    const source = variableSources[name] || "self";
-    const isSelf = source === "self";
-    let value: unknown;
+  return Array.from(allVarNames).sort().map((name): ScenarioVariableItem => {
+    // Parent resolution: Default inherits from env; others inherit from Default
+    const rawParent: unknown = isDefault ? envData[name] : defaultVars[name];
+    const hasParent = rawParent !== undefined;
+
+    // A variable is "overriding" when it has its own value in this scenario
+    const isOverride = name in ownVars;
+
+    // JSON flag: auto-true for object-type template items; editable only in Default
+    const isObjectType = templateItems.some(i => i.name === name && i.type === 'object');
     let isJson: boolean;
-    if (isSelf) {
-      value = ownVars[name];
-      isJson = variableJsonFlags[name] === true;
+    let isJsonEditable: boolean;
+    if (isDefault) {
+      isJson = variableJsonFlags[name] !== undefined
+        ? variableJsonFlags[name] === true
+        : isObjectType;
+      isJsonEditable = true;
     } else {
-      const srcData = allScenarios[source] ?? { variables: {}, variableJsonFlags: {} };
-      value = (srcData.variables ?? {})[name];
-      isJson = (srcData.variableJsonFlags ?? {})[name] === true;
+      isJson = defaultJsonFlags[name] !== undefined
+        ? defaultJsonFlags[name] === true
+        : isObjectType;
+      isJsonEditable = false;
     }
-    const valueStr =
-      typeof value === "string" ? value : value !== undefined ? JSON.stringify(value) : "";
 
-    const inheritableFrom = Object.entries(allScenarios)
-      .filter(([sn, sc]) => {
-        if (sn === activeScenarioName) return false;
-        const scVars = sc.variables || {};
-        const scSources = sc.variableSources || {};
-        return name in scVars && (scSources[name] === "self" || scSources[name] === undefined);
-      })
-      .map(([sn]) => sn);
+    const rawOwn = ownVars[name];
+    const ownValue = rawOwn !== undefined
+      ? (typeof rawOwn === 'string' ? rawOwn : JSON.stringify(rawOwn))
+      : '';
+    const parentValue = rawParent !== undefined
+      ? (typeof rawParent === 'string' ? rawParent : JSON.stringify(rawParent))
+      : '';
 
-    return { name, value: valueStr, isJson, source, inheritableFrom };
+    return {
+      name,
+      ownValue,
+      parentValue,
+      isJson,
+      isOverride,
+      hasParent,
+      isJsonEditable,
+    };
   });
+}
+
+/**
+ * The values a scenario contributes to a render, by the same rules the Context
+ * Manager shows (getScenarioVariablesData):
+ * - Default contributes its own values (the environment is merged in separately);
+ * - any other scenario starts from Default's values and overrides what it sets itself;
+ * - a value is parsed as JSON when Default's JSON flag says so, or, with no flag,
+ *   when the template uses it as an object.
+ */
+export function resolveScenarioValues(
+  allScenarios: ScenariosData,
+  activeScenarioName: string,
+  templateItems: ContextItem[],
+): Record<string, unknown> {
+  const defaultScenario = allScenarios['Default'];
+  const activeScenario = allScenarios[activeScenarioName];
+  const isDefault = activeScenarioName === 'Default';
+  const jsonFlags = defaultScenario?.variableJsonFlags ?? {};
+  const objectNames = new Set(templateItems.filter(i => i.type === 'object').map(i => i.name));
+
+  const raw: Record<string, unknown> = {
+    ...(isDefault ? {} : defaultScenario?.variables ?? {}),
+    ...(activeScenario?.variables ?? {}),
+  };
+
+  const values: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    const isJson = jsonFlags[name] !== undefined ? jsonFlags[name] === true : objectNames.has(name);
+    if (isJson && typeof value === 'string') {
+      try {
+        values[name] = JSON.parse(value);
+        continue;
+      } catch {
+        // Not valid JSON: render the text as typed
+      }
+    }
+    values[name] = value;
+  }
+  return values;
+}
+
+/**
+ * Turns a template's method mappings ("object.method" -> mock function name) into
+ * method mocks on the render context. A mapping applies when the object has no
+ * value or is a plain object (its properties are kept); a list or other value keeps
+ * its real methods, e.g. a JSON array's size().
+ */
+export function applyMethodMappings(
+  context: Record<string, unknown>,
+  methodMappings: Record<string, string> | undefined,
+  mockFunctions: Record<string, string> | undefined,
+): void {
+  for (const [fullName, functionName] of Object.entries(methodMappings ?? {})) {
+    const implementation = functionName ? mockFunctions?.[functionName] : undefined;
+    const dot = fullName.indexOf('.');
+    if (implementation === undefined || dot <= 0 || dot === fullName.length - 1) {
+      continue;
+    }
+    const objectName = fullName.slice(0, dot);
+    const methodName = fullName.slice(dot + 1);
+    const existing = context[objectName];
+    if (existing !== undefined && (typeof existing !== 'object' || existing === null || Array.isArray(existing))) {
+      continue;
+    }
+    context[objectName] = {
+      ...(existing as Record<string, unknown> | undefined),
+      [methodName]: { _implementation: implementation },
+    };
+  }
+}
+
+/**
+ * Compares two template paths as stored in the environment context file
+ * (slash direction ignored; case-insensitive on Windows).
+ */
+export function isSameTemplatePath(a: string, b: string): boolean {
+  const normalize = (p: string) => {
+    const slashes = p.replace(/\\/g, "/");
+    return process.platform === "win32" ? slashes.toLowerCase() : slashes;
+  };
+  return normalize(a) === normalize(b);
+}
+
+/**
+ * Absolute path for a template path as stored in the environment context file
+ * (relative paths are relative to the first workspace folder).
+ */
+export function resolveTemplatePath(storedPath: string): string {
+  if (path.isAbsolute(storedPath)) {
+    return storedPath;
+  }
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  return workspaceRoot ? path.join(workspaceRoot, storedPath) : storedPath;
 }
 
 // ---------------------------------------------------------------------------

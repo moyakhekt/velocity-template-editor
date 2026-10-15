@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sign in</title>
+</head>
+<body class="theme-$!HttpServletRequest.getParameter('theme')">
+    <h1>Sign in</h1>
+    <p>Language: $locale.getLanguage()</p>
+
+    #if($showError)
+    <div class="error">
+        <strong>Error:</strong> $templateMessages.getMessage($authnMessageKey)
+    </div>
+    #end
+
+    <form method="post" action="/login">
+        <label>Username <input type="text" name="username" value="$!username"></label>
+        <label>Password <input type="password" name="password"></label>
+        <button type="submit">Sign in</button>
+    </form>
+</body>
+</html>

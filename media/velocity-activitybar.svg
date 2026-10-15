@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="24" height="24">
+  <!-- Activity Bar icon: the { V } logo as a single-colour outline (VS Code tints it) -->
+  <g fill="none" stroke="#c5c5c5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M37 22 C25 22 22 28 22 38 L22 52 C22 59 18 63 10 64 C18 65 22 69 22 76 L22 90 C22 100 25 106 37 106" stroke-width="10"/>
+    <path d="M91 22 C103 22 106 28 106 38 L106 52 C106 59 110 63 118 64 C110 65 106 69 106 76 L106 90 C106 100 103 106 91 106" stroke-width="10"/>
+    <path d="M45 36 L64 92 L83 36" stroke-width="14"/>
+  </g>
+</svg>

@@ -21,6 +21,20 @@ const copyTemplatesPlugin = {
       } catch (err) {
         console.error('[copy] failed to copy webview-ui:', err);
       }
+
+      // Codicons are a dev dependency, so node_modules isn't packaged with them:
+      // ship the stylesheet and its font (referenced by the CSS) from out/
+      try {
+        const srcCodicons = path.join(__dirname, 'node_modules', '@vscode', 'codicons', 'dist');
+        const outCodicons = path.join(__dirname, 'out', 'codicons');
+        await fs.ensureDir(outCodicons);
+        for (const file of ['codicon.css', 'codicon.ttf']) {
+          await fs.copy(path.join(srcCodicons, file), path.join(outCodicons, file), { overwrite: true });
+        }
+        console.log('[copy] codicons copied');
+      } catch (err) {
+        console.error('[copy] failed to copy codicons:', err);
+      }
     });
   }
 };

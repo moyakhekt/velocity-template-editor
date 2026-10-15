@@ -1,4 +1,6 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import {
   IContextServices,
@@ -8,7 +10,7 @@ import {
   getUrlSourceOptionsData,
 } from "./contextManagerServices";
 import { ContextData } from "./contextManager";
-import { TemplateParser } from "../shared/templateParser";
+import { TemplateParser, ContextItem } from "../shared/templateParser";
 import {
   SwitchScenarioCommand,
   SaveNewScenarioCommand,
@@ -23,9 +25,12 @@ import {
   SaveScenarioVariableValueCommand,
   ToggleScenarioVariableJsonCommand,
   ChangeScenarioVariableSourceCommand,
+  EditScenarioVariableInEditorCommand,
 } from "../shared/messageTypes";
 
 export class ScenarioService {
+  private readonly openJsonEditors = new Map<string, { tempPath: string; disposables: vscode.Disposable[] }>();
+
   constructor(private readonly deps: IContextServices) {}
 
   async handleSwitchScenario(
@@ -39,16 +44,34 @@ export class ScenarioService {
 
     const scenarios = fileData.scenarios || { Default: { variables: {} } };
     const activeScenario = scenarios[message.scenario] || { variables: {} };
-    const contextData = await this.deps.getTemplateOnlyContext(currentTemplatePath);
 
     const { url, urlSource } = getUrlWithSource(message.scenario, fileData);
 
     const headersData = getScenarioHeadersData(activeScenario, fileData.headers || "");
+
+    // Gather template-detected variables plus the names to exclude (mapped special
+    // vars, foreach loop sources) the same way the full webview render does, so the
+    // DOM patch after a scenario switch shows exactly the same rows.
+    let templateItems: ContextItem[] = [];
+    const excludeNames = new Set<string>(
+      [fileData.httpServletRequestVar, fileData.localeVar, fileData.templateMessagesVar, fileData.escapeToolVar]
+        .filter((v): v is string => !!v),
+    );
+    try {
+      const templateContent = await fs.promises.readFile(currentTemplatePath, "utf8");
+      templateItems = Array.from(TemplateParser.analyzeContext(templateContent).values());
+      TemplateParser.extractForeachLoopVariables(templateContent).forEach((v) => excludeNames.add(v));
+    } catch {
+      // Template unreadable — fall back to whatever's already stored in the scenario.
+    }
+
     const variablesData = getScenarioVariablesData(
       activeScenario,
-      contextData,
       scenarios,
       message.scenario,
+      this.deps.getEnvironmentContext().data,
+      templateItems,
+      excludeNames,
     );
 
     const urlSourceOptionsData = getUrlSourceOptionsData(
@@ -260,7 +283,6 @@ export class ScenarioService {
     scenario.headers[message.name] = message.value;
 
     await this.deps.saveTemplateContext(currentTemplatePath, fileData);
-    void this.deps.updateWebview(currentTemplatePath);
     this.deps.refreshPreviewIfOpen(currentTemplatePath);
     vscode.window.setStatusBarMessage(`$(check) Header "${message.name}" updated`, 3000);
   }
@@ -326,40 +348,42 @@ export class ScenarioService {
   ): Promise<void> {
     const { name } = message;
     const fileData = await this.deps.getTemplateContextFileData(currentTemplatePath);
-    const activeScenario = fileData.activeScenario || "Default";
+    const activeScenarioName = fileData.activeScenario || "Default";
+    const scenario = fileData.scenarios?.[activeScenarioName];
+    if (!scenario) return;
 
-    if (!fileData.scenarios?.[activeScenario]?.variables?.[name]) {
-      return;
-    }
+    if (!scenario.variables) scenario.variables = {};
+    if (!scenario.variableSources) scenario.variableSources = {};
 
-    const confirm = await vscode.window.showWarningMessage(
-      `Delete variable "${name}" from scenario "${activeScenario}"?`,
-      { modal: true },
-      "Delete",
-    );
+    // Clear the value but keep the row (do not delete variableSources)
+    delete scenario.variables[name];
+    scenario.variableSources[name] = "self";
 
-    if (confirm === "Delete") {
-      delete fileData.scenarios[activeScenario].variables[name];
-      
-      // Also clean up metadata
-      if (fileData.scenarios[activeScenario].variableSources?.[name]) {
-        delete fileData.scenarios[activeScenario].variableSources[name];
-      }
-      if (fileData.scenarios[activeScenario].variableJsonFlags?.[name]) {
-        delete fileData.scenarios[activeScenario].variableJsonFlags[name];
-      }
+    await this.deps.saveTemplateContext(currentTemplatePath, fileData);
 
-      await this.deps.saveTemplateContext(currentTemplatePath, fileData);
-      
-      // Send targeted DOM update instead of full refresh
-      this.deps.postWebviewMessage({
-        command: 'deleteScenarioVariable',
-        name: name
-      });
-      
-      this.deps.refreshPreviewIfOpen(currentTemplatePath);
-      vscode.window.setStatusBarMessage(`$(check) Deleted variable: ${name}`, 3000);
-    }
+    const isDefault = activeScenarioName === "Default";
+    const rawParent = isDefault
+      ? this.deps.getEnvironmentContext().data[name]
+      : (fileData.scenarios?.["Default"]?.variables ?? {})[name];
+    const hasParent = rawParent !== undefined;
+
+    this.deps.postWebviewMessage({
+      command: "deleteScenarioVariable",
+      variable: {
+        name,
+        ownValue: "",
+        parentValue: hasParent
+          ? (typeof rawParent === "string" ? rawParent : JSON.stringify(rawParent))
+          : "",
+        isJson: scenario.variableJsonFlags?.[name] === true,
+        isOverride: false,
+        hasParent,
+        isJsonEditable: isDefault,
+      },
+    });
+
+    this.deps.refreshPreviewIfOpen(currentTemplatePath);
+    vscode.window.setStatusBarMessage(`$(check) Cleared variable: ${name}`, 3000);
   }
 
   async handleSaveNewScenarioVariable(
@@ -423,6 +447,8 @@ export class ScenarioService {
 
     const cleanValue = typeof value === "string" ? value : String(value);
     fileData.scenarios[targetScenario].variables[name] = cleanValue;
+    if (!fileData.scenarios[targetScenario].variableSources) fileData.scenarios[targetScenario].variableSources = {};
+    fileData.scenarios[targetScenario].variableSources![name] = 'self';
 
     if (isJson !== undefined) {
       if (!fileData.scenarios[targetScenario].variableJsonFlags) fileData.scenarios[targetScenario].variableJsonFlags = {};
@@ -430,7 +456,8 @@ export class ScenarioService {
     }
 
     await this.deps.saveTemplateContext(currentTemplatePath, fileData);
-    void this.deps.updateWebview(currentTemplatePath);
+    // Don't call updateWebview here — the client already updates the DOM on blur; a full
+    // refresh would reset the scroll position.
     this.deps.refreshPreviewIfOpen(currentTemplatePath);
     vscode.window.setStatusBarMessage(`$(check) Updated variable: ${name}`, 3000);
   }
@@ -538,4 +565,165 @@ export class ScenarioService {
       });
     }
   }
+
+  async handleToggleScenarioVariableOverride(
+    message: { name: string; isOverride: boolean },
+    currentTemplatePath: string,
+  ): Promise<void> {
+    const { name, isOverride } = message;
+    if (!name) return;
+
+    const fileData = await this.deps.getTemplateContextFileData(currentTemplatePath);
+    const activeScenarioName = fileData.activeScenario || 'Default';
+    const scenario = fileData.scenarios?.[activeScenarioName];
+    if (!scenario) return;
+
+    if (!scenario.variableSources) scenario.variableSources = {};
+    if (!scenario.variables) scenario.variables = {};
+
+    if (isOverride) {
+      scenario.variableSources[name] = 'self';
+      // Seed with inherited value if no own value yet
+      if (!(name in scenario.variables)) {
+        const isDefault = activeScenarioName === 'Default';
+        const parentValue = isDefault
+          ? this.deps.getEnvironmentContext().data[name]
+          : (fileData.scenarios?.['Default']?.variables ?? {})[name];
+        scenario.variables[name] = parentValue !== undefined
+          ? (typeof parentValue === 'string' ? parentValue : JSON.stringify(parentValue))
+          : '';
+      }
+    } else {
+      delete scenario.variables[name];
+      delete (scenario.variableSources ?? {})[name];
+      delete (scenario.variableJsonFlags ?? {})[name];
+    }
+
+    await this.deps.saveTemplateContext(currentTemplatePath, fileData);
+    void this.deps.updateWebview(currentTemplatePath);
+    this.deps.refreshPreviewIfOpen(currentTemplatePath);
+    vscode.window.setStatusBarMessage(
+      `$(check) Variable \$${name} override: ${isOverride ? 'on' : 'off'}`, 2000,
+    );
+  }
+
+  private sanitizeForFilename(s: string): string {
+    const cleaned = s.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 60);
+    return cleaned || 'value';
+  }
+
+  /**
+   * Opens a scenario's JSON-flagged variable value in a real VS Code editor tab
+   * (backed by a temp .json file) instead of the small inline textarea, so the
+   * developer gets syntax highlighting and VS Code's own JSON validation. Saving
+   * the temp file writes the value back into the scenario, same as the inline
+   * textarea does on blur.
+   */
+  async handleEditScenarioVariableInEditor(
+    message: EditScenarioVariableInEditorCommand,
+    currentTemplatePath: string,
+  ): Promise<void> {
+    const { name, value } = message;
+    if (!name) return;
+
+    const fileData = await this.deps.getTemplateContextFileData(currentTemplatePath);
+    const activeScenarioName = fileData.activeScenario || 'Default';
+    const scenario = fileData.scenarios?.[activeScenarioName];
+    if (!scenario) return;
+
+    const editorKey = `${currentTemplatePath}::${activeScenarioName}::${name}`;
+    const existing = this.openJsonEditors.get(editorKey);
+    if (existing) {
+      const doc = await vscode.workspace.openTextDocument(existing.tempPath);
+      await vscode.window.showTextDocument(doc, { preview: false });
+      return;
+    }
+
+    // Pretty-print if the current value is already valid JSON, so the editor opens
+    // with readable formatting; otherwise seed the raw text as-is so nothing is lost.
+    let seedContent = value ?? '';
+    try {
+      seedContent = JSON.stringify(JSON.parse(seedContent), null, 2);
+    } catch {
+      // Not valid JSON yet (e.g. a brand-new/empty variable) — leave as typed.
+    }
+
+    const tempDir = path.join(os.tmpdir(), 'vtl-editor-scenario-json');
+    await fs.promises.mkdir(tempDir, { recursive: true });
+    const fileName = `${this.sanitizeForFilename(path.basename(currentTemplatePath))}__${this.sanitizeForFilename(activeScenarioName)}__${this.sanitizeForFilename(name)}.json`;
+    const tempPath = path.join(tempDir, fileName);
+    await fs.promises.writeFile(tempPath, seedContent, 'utf8');
+
+    const doc = await vscode.workspace.openTextDocument(tempPath);
+    await vscode.window.showTextDocument(doc, { preview: false });
+
+    const cleanup = () => {
+      const entry = this.openJsonEditors.get(editorKey);
+      if (entry) {
+        entry.disposables.forEach((d) => d.dispose());
+        this.openJsonEditors.delete(editorKey);
+      }
+      fs.promises.unlink(tempPath).catch(() => { /* best-effort cleanup */ });
+    };
+
+    const saveListener = vscode.workspace.onDidSaveTextDocument(async (savedDoc) => {
+      if (savedDoc.uri.fsPath !== tempPath) return;
+
+      const text = savedDoc.getText();
+      try {
+        JSON.parse(text);
+      } catch (e) {
+        vscode.window.showErrorMessage(
+          `$${name}: not valid JSON — fix and save again. (${e instanceof Error ? e.message : String(e)})`,
+        );
+        return;
+      }
+
+      const latestFileData = await this.deps.getTemplateContextFileData(currentTemplatePath);
+      const latestScenario = latestFileData.scenarios?.[activeScenarioName];
+      if (!latestScenario) return;
+
+      if (!latestScenario.variables) latestScenario.variables = {};
+      if (!latestScenario.variableSources) latestScenario.variableSources = {};
+      if (!latestScenario.variableJsonFlags) latestScenario.variableJsonFlags = {};
+      latestScenario.variables[name] = text;
+      latestScenario.variableSources[name] = 'self';
+      latestScenario.variableJsonFlags[name] = true;
+
+      await this.deps.saveTemplateContext(currentTemplatePath, latestFileData);
+      this.deps.refreshPreviewIfOpen(currentTemplatePath);
+
+      const isDefault = activeScenarioName === 'Default';
+      const rawParent = isDefault
+        ? this.deps.getEnvironmentContext().data[name]
+        : (latestFileData.scenarios?.['Default']?.variables ?? {})[name];
+      const hasParent = rawParent !== undefined;
+
+      this.deps.postWebviewMessage({
+        command: 'refreshScenarioVariableRow',
+        variable: {
+          name,
+          ownValue: text,
+          parentValue: hasParent
+            ? (typeof rawParent === 'string' ? rawParent : JSON.stringify(rawParent))
+            : '',
+          isJson: true,
+          isOverride: true,
+          hasParent,
+          isJsonEditable: isDefault,
+        },
+      });
+
+      vscode.window.setStatusBarMessage(`$(check) Updated variable: ${name}`, 3000);
+    });
+
+    const closeListener = vscode.workspace.onDidCloseTextDocument((closedDoc) => {
+      if (closedDoc.uri.fsPath === tempPath) {
+        cleanup();
+      }
+    });
+
+    this.openJsonEditors.set(editorKey, { tempPath, disposables: [saveListener, closeListener] });
+  }
+
 }

@@ -5,7 +5,7 @@
       "type": "java",
       "name": "Debug Java Server",
       "request": "launch",
-      "mainClass": "com.ktmoyakhe.vscode.velocity.VelocityServer",
+      "mainClass": "com.moyakhekt.vscode.velocity.VelocityServer",
       "projectName": "velocity-server",
       "args": [],
       "console": "integratedTerminal"

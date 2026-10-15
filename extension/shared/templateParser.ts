@@ -613,6 +613,18 @@ export class TemplateParser {
         return names;
     }
 
+    /** Returns the loop variable names declared by #foreach, e.g. $device from #foreach($device in $devices). */
+    static extractForeachLoopVariables(content: string): Set<string> {
+        const cleanedContent = TemplateParser.stripComments(content);
+        const pattern = /#foreach\s*\(\s*\$([a-zA-Z_][a-zA-Z0-9_]*)\s+in\s+/g;
+        const names = new Set<string>();
+        let match;
+        while ((match = pattern.exec(cleanedContent)) !== null) {
+            names.add(match[1]);
+        }
+        return names;
+    }
+
     /**
      * Get a summary of all references in the template
      */

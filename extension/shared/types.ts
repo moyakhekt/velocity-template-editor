@@ -33,10 +33,10 @@ export interface ScenarioData {
     headers?: string | Record<string, string>; // Legacy string or new object format
     headerSources?: { [key: string]: string }; // Source for each header: 'self', 'environment', or scenario name
     variables: Record<string, unknown>;
-    variableSources?: { [key: string]: string }; // Source for each variable: 'self', 'environment', or scenario name
-    variableJsonFlags?: { [key: string]: boolean }; // Whether each variable value should be parsed as JSON
-    methods?: MethodsRecord; // Scenario-specific method overrides
-    inheritFrom?: string; // Name of parent scenario to inherit from
+    variableSources?: { [key: string]: string }; // 'self' = own value; absent = inheriting
+    variableJsonFlags?: { [key: string]: boolean }; // parse value as JSON
+    methods?: MethodsRecord;
+    inheritFrom?: string;
 }
 
 export interface ScenariosData {
@@ -73,6 +73,16 @@ export interface TemplateContextInEnvironment {
     autoScaffoldedRequestParams?: string[];
 }
 
+/**
+ * A set of templates that share one template context (scenarios, mappings).
+ * Used when templates are customized copies of a default template and should
+ * be tested against the same scenarios. Membership here takes precedence over
+ * an entry for the same path in `templates`.
+ */
+export interface TemplateContextGroup extends TemplateContextInEnvironment {
+    templates: string[]; // Member template paths, normalized the same way as `templates` keys
+}
+
 export interface EnvironmentContextConfig {
     filePath?: string; // Path to environment context file
     messagesPropertiesPath?: string; // Path to messages.properties file (deprecated, use messagesPropertiesPaths)
@@ -83,5 +93,6 @@ export interface EnvironmentContextConfig {
     mockFunctions?: { [name: string]: string }; // Environment mock functions (name -> implementation)
     data: Record<string, unknown>; // Other environment context variables
     templates?: { [templatePath: string]: TemplateContextInEnvironment }; // Template-specific context (scenarios, mappings)
+    templateGroups?: { [groupName: string]: TemplateContextGroup }; // Templates sharing one context
 }
 

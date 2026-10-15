@@ -57,6 +57,9 @@ function setupEventListeners() {
                 case 'deleteScenarioVariable':
                     deleteScenarioVariable(button.getAttribute('data-name'));
                     break;
+                case 'editScenarioVariableInEditor':
+                    editScenarioVariableInEditor(button.getAttribute('data-name'));
+                    break;
                 case 'deleteMessagesFile':
                     deleteMessagesFile(button.getAttribute('data-file-index'));
                     break;
@@ -272,13 +275,11 @@ function setupEventListeners() {
         // Handle checkbox toggles (e.g., JSON flag for scenario variables)
         if (target.matches('input[type="checkbox"][data-action]')) {
             const action = target.getAttribute('data-action');
+            const name = target.getAttribute('data-name');
             if (action === 'toggleScenarioVariableJson') {
-                const name = target.getAttribute('data-name');
-                vscode.postMessage({
-                    command: 'toggleScenarioVariableJson',
-                    name: name,
-                    isJson: target.checked
-                });
+                vscode.postMessage({ command: 'toggleScenarioVariableJson', name, isJson: target.checked });
+            } else if (action === 'toggleScenarioVariableOverride') {
+                vscode.postMessage({ command: 'toggleScenarioVariableOverride', name, isOverride: target.checked });
             }
             return;
         }
@@ -527,24 +528,32 @@ function setupEventListeners() {
                     }
                 }
             } else if (action === 'editScenarioVariable') {
-                const field = target.getAttribute('data-field');
                 const name = target.getAttribute('data-name');
                 const scenario = target.getAttribute('data-scenario');
-                const row = target.closest('tr');
-                if (field === 'value' && name) {
-                    // Save scenario variable value
-                    vscode.postMessage({
-                        command: 'saveScenarioVariableValue',
-                        name: name,
-                        value: target.value,
-                        scenario: scenario
-                    });
-                    if (row) {
-                        row.classList.remove('editing');
-                        const span = target.parentElement.querySelector('.header-cell-value');
-                        if (span) {
-                            span.textContent = target.value || '(empty)';
+                const isTextarea = target.tagName === 'TEXTAREA';
+                if (name) {
+                    const value = target.value;
+                    // Validate JSON if this is a JSON textarea
+                    if (isTextarea) {
+                        const errSpan = document.getElementById('json-err-' + name);
+                        if (value.trim()) {
+                            try {
+                                JSON.parse(value);
+                                target.classList.remove('json-error');
+                                if (errSpan) errSpan.style.display = 'none';
+                            } catch (e) {
+                                target.classList.add('json-error');
+                                if (errSpan) { errSpan.textContent = 'Invalid JSON: ' + e.message; errSpan.style.display = ''; }
+                                return; // don't save invalid JSON
+                            }
                         }
+                    }
+                    vscode.postMessage({ command: 'saveScenarioVariableValue', name, value, scenario });
+                    const row = target.closest('tr');
+                    if (row && !isTextarea) {
+                        row.classList.remove('editing');
+                        const span = target.parentElement?.querySelector('.header-cell-value');
+                        if (span) span.textContent = value || '(empty)';
                     }
                 }
             } else if (action === 'saveScenarioName') {
@@ -882,6 +891,9 @@ window.addEventListener('message', event => {
             break;
         case 'deleteScenarioVariable':
             deleteScenarioVariableDOM(message);
+            break;
+        case 'refreshScenarioVariableRow':
+            refreshScenarioVariableRowDOM(message);
             break;
         case 'updateScenario':
             updateScenarioDOM(message);
@@ -1263,10 +1275,19 @@ function updateScenarioVariableDOM(msg) {
 }
 
 function deleteScenarioVariableDOM(msg) {
-    const row = document.querySelector(`#scenario-variables-tbody tr[data-variable-name="${cssEscape(msg.name)}"]`);
-    if (row) {
-        row.remove();
-    }
+    const tbody = document.getElementById('scenario-variables-tbody');
+    if (!tbody) return;
+    const row = tbody.querySelector(`tr[data-variable-name="${cssEscape(msg.variable.name)}"]`);
+    if (!row) return;
+    tbody.replaceChild(buildScenarioVariableRow(msg.variable), row);
+}
+
+function refreshScenarioVariableRowDOM(msg) {
+    const tbody = document.getElementById('scenario-variables-tbody');
+    if (!tbody || !msg.variable) return;
+    const row = tbody.querySelector(`tr[data-variable-name="${cssEscape(msg.variable.name)}"]`);
+    if (!row) return;
+    tbody.replaceChild(buildScenarioVariableRow(msg.variable), row);
 }
 
 function buildScenarioHeaderRow(header) {
@@ -1319,98 +1340,110 @@ function buildScenarioHeaderRow(header) {
 
 function buildScenarioVariableRow(variable) {
     const tr = document.createElement('tr');
-    const isSelf = variable.source === 'self';
-    const hasInheritable = Array.isArray(variable.inheritableFrom) && variable.inheritableFrom.length > 0;
+    tr.dataset.variableName = variable.name;
 
+    // Name cell
     const tdName = document.createElement('td');
-    tdName.textContent = variable.name;
+    tdName.className = 'var-name-cell';
+    tdName.textContent = '$' + variable.name;
     tr.appendChild(tdName);
 
+    // Value cell
     const tdValue = document.createElement('td');
-    if (isSelf) { tdValue.setAttribute('data-action', 'editVariableCell'); }
-    const valueSpan = document.createElement('span');
-    valueSpan.className = 'header-cell-value';
-    if (!isSelf) { valueSpan.style.cssText = 'color:var(--vscode-descriptionForeground);font-style:italic;'; }
-    valueSpan.textContent = variable.value || '(empty)';
-    tdValue.appendChild(valueSpan);
-    if (isSelf) {
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.value = variable.value;
-        input.dataset.action = 'editScenarioVariable';
-        input.dataset.field = 'value';
-        input.dataset.name = variable.name;
-        input.className = 'header-cell-input';
-        tdValue.appendChild(input);
+    if (variable.isOverride) {
+        if (variable.isJson) {
+            tdValue.setAttribute('data-action', 'editVariableCell');
+            const ta = document.createElement('textarea');
+            ta.className = 'var-json-textarea';
+            ta.dataset.action = 'editScenarioVariable';
+            ta.dataset.name = variable.name;
+            ta.rows = 3;
+            ta.value = variable.ownValue;
+            tdValue.appendChild(ta);
+            const editBtn = document.createElement('button');
+            editBtn.type = 'button';
+            editBtn.className = 'icon-button var-json-edit-btn';
+            editBtn.title = 'Edit in VS Code editor';
+            editBtn.dataset.action = 'editScenarioVariableInEditor';
+            editBtn.dataset.name = variable.name;
+            editBtn.innerHTML = '<span class="codicon codicon-go-to-file"></span> Edit in Editor';
+            tdValue.appendChild(editBtn);
+            const errSpan = document.createElement('span');
+            errSpan.id = 'json-err-' + variable.name;
+            errSpan.style.cssText = 'display:none;color:var(--vscode-inputValidation-errorForeground);font-size:11px;';
+            tdValue.appendChild(errSpan);
+        } else {
+            tdValue.setAttribute('data-action', 'editVariableCell');
+            const span = document.createElement('span');
+            span.className = 'header-cell-value';
+            span.textContent = variable.ownValue || '(empty)';
+            tdValue.appendChild(span);
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = variable.ownValue;
+            input.dataset.action = 'editScenarioVariable';
+            input.dataset.name = variable.name;
+            input.className = 'header-cell-input';
+            tdValue.appendChild(input);
+        }
+    } else {
+        const span = document.createElement('span');
+        span.className = 'var-value-inherited' + (variable.hasParent ? '' : ' var-value-unset');
+        span.textContent = variable.hasParent ? (variable.parentValue || '(empty)') : '(not set)';
+        tdValue.appendChild(span);
     }
     tr.appendChild(tdValue);
 
+    // JSON checkbox
     const tdJson = document.createElement('td');
-    tdJson.style.cssText = 'text-align:center;';
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.title = isSelf ? 'Parse value as JSON array/object' : 'JSON parsing (inherited, read-only)';
-    checkbox.checked = variable.isJson;
-    if (isSelf) {
-        checkbox.dataset.action = 'toggleScenarioVariableJson';
-        checkbox.dataset.name = variable.name;
+    tdJson.className = 'var-th-center';
+    const cbJson = document.createElement('input');
+    cbJson.type = 'checkbox';
+    cbJson.checked = variable.isJson;
+    cbJson.title = variable.isJsonEditable ? 'Parse as JSON object/array' : 'Inherited from Default (read-only)';
+    if (variable.isJsonEditable) {
+        cbJson.dataset.action = 'toggleScenarioVariableJson';
+        cbJson.dataset.name = variable.name;
     } else {
-        checkbox.disabled = true;
+        cbJson.disabled = true;
     }
-    tdJson.appendChild(checkbox);
+    tdJson.appendChild(cbJson);
     tr.appendChild(tdJson);
 
-    const tdSource = document.createElement('td');
-    if (hasInheritable) {
-        tdSource.setAttribute('data-action', 'editSourceCell');
-        tdSource.style.cursor = 'pointer';
+    // Override checkbox
+    const tdOverride = document.createElement('td');
+    tdOverride.className = 'var-th-center';
+    const cbOverride = document.createElement('input');
+    cbOverride.type = 'checkbox';
+    cbOverride.checked = variable.isOverride;
+    cbOverride.title = variable.hasParent ? 'Override parent value' : 'No parent to inherit from (always own value)';
+    if (variable.hasParent) {
+        cbOverride.dataset.action = 'toggleScenarioVariableOverride';
+        cbOverride.dataset.name = variable.name;
     } else {
-        tdSource.style.cursor = 'default';
+        cbOverride.disabled = true;
     }
-    const sourceSpan = document.createElement('span');
-    sourceSpan.className = 'header-cell-value';
-    if (!isSelf) { sourceSpan.style.cssText = 'color:var(--vscode-descriptionForeground);font-style:italic;'; }
-    sourceSpan.textContent = variable.source === 'self' ? 'Self' : variable.source;
-    tdSource.appendChild(sourceSpan);
-    if (hasInheritable) {
-        const select = document.createElement('select');
-        select.className = 'header-cell-input scenario-source-select';
-        select.dataset.action = 'changeScenarioVariableSource';
-        select.dataset.name = variable.name;
-        const selfOpt = document.createElement('option');
-        selfOpt.value = 'self';
-        selfOpt.textContent = 'Self';
-        selfOpt.selected = variable.source === 'self';
-        select.appendChild(selfOpt);
-        for (const sn of variable.inheritableFrom) {
-            const opt = document.createElement('option');
-            opt.value = sn;
-            opt.textContent = sn;
-            opt.selected = variable.source === sn;
-            select.appendChild(opt);
-        }
-        tdSource.appendChild(select);
-    }
-    tr.appendChild(tdSource);
+    tdOverride.appendChild(cbOverride);
+    tr.appendChild(tdOverride);
 
-    const tdAction = document.createElement('td');
-    if (isSelf) {
+    // Clear button column
+    const tdClear = document.createElement('td');
+    if (variable.isOverride && variable.ownValue) {
         const btn = document.createElement('button');
         btn.className = 'icon-button';
-        btn.dataset.action = 'deleteScenarioVariable';
-        btn.dataset.name = variable.name;
-        btn.title = 'Delete';
-        const icon = document.createElement('span');
-        icon.className = 'codicon codicon-trash';
-        btn.appendChild(icon);
-        tdAction.appendChild(btn);
+        btn.title = 'Clear (unset)';
+        btn.setAttribute('data-action', 'deleteScenarioVariable');
+        btn.setAttribute('data-name', variable.name);
+        btn.innerHTML = '<span class="codicon codicon-trash"></span>';
+        tdClear.appendChild(btn);
     }
-    tr.appendChild(tdAction);
+    tr.appendChild(tdClear);
 
     return tr;
 }
 
 function updateScenarioDOM(msg) {
+    syncScenarioSelection(msg.scenarioName);
     
     // 0. Update checked radio button for scenario selection
     const radioButtons = document.querySelectorAll('input[type="radio"][name="scenario"]');
@@ -1423,7 +1456,7 @@ function updateScenarioDOM(msg) {
     });
     
     // 1. Update scenario title
-    const scenarioTitle = document.querySelector('.scenario-title');
+    const scenarioTitle = document.querySelector('#template-tab .scenario-title');
     if (scenarioTitle) {
         scenarioTitle.textContent = msg.scenarioName;
     }
@@ -1707,11 +1740,10 @@ function showVariableRowDOM(msg) {
 }
 
 function saveScrollState() {
-    const state = {
-        scrollPosition: window.scrollY || document.documentElement.scrollTop,
-        activeTab: document.getElementById('template-tab').classList.contains('active') ? 'template' : 'environment'
-    };
-    vscode.setState(state);
+    const activeTab = document.querySelector('.tab.active');
+    updateUiState({
+        activeTab: activeTab ? activeTab.getAttribute('data-tab') : 'template'
+    });
 }
 
 function switchTab(tab) {
@@ -2165,17 +2197,15 @@ function addScenario() {
 }
 
 function saveNewScenario() {
-    const table = document.querySelector('.scenarios-table tbody');
-    if (!table) return;
-    
-    const newRow = table.querySelector('tr.new-row');
-    if (!newRow) return;
-    
-    const nameInput = newRow.querySelector('input[data-scenario-part="name"]');
-    
+    const nameInput = document.querySelector('#template-tab .scenario-new-form .scenario-new-input');
+    const name = nameInput ? nameInput.value.trim() : '';
+    if (!name) {
+        if (nameInput) nameInput.focus();
+        return;
+    }
     vscode.postMessage({
         command: 'saveNewScenario',
-        name: nameInput ? nameInput.value : ''
+        name
     });
 }
 
@@ -2267,6 +2297,18 @@ function addScenarioVariable() {
         command: 'getAvailableScenarioVariables'
     });
     // showNewRow will be called when backend responds with availableScenarioVariables
+}
+
+function editScenarioVariableInEditor(name) {
+    const tbody = document.getElementById('scenario-variables-tbody');
+    const row = tbody ? tbody.querySelector(`tr[data-variable-name="${cssEscape(name)}"]`) : null;
+    const textarea = row ? row.querySelector('textarea[data-action="editScenarioVariable"]') : null;
+    const value = textarea ? textarea.value : '';
+    vscode.postMessage({
+        command: 'editScenarioVariableInEditor',
+        name: name,
+        value: value
+    });
 }
 
 function deleteScenarioVariable(name) {
@@ -2589,60 +2631,22 @@ function saveMethodMapping(method, mappedTo) {
 }
 
 function showNewScenarioRow() {
-    // Find the scenarios table
-    const table = document.querySelector('.scenarios-table tbody');
-    if (!table) {
-        console.error('Could not find scenarios table tbody');
-        return;
+    const form = document.querySelector('#template-tab .scenario-new-form');
+    if (!form) return;
+    form.hidden = false;
+    const nameInput = form.querySelector('.scenario-new-input');
+    if (nameInput) {
+        nameInput.value = '';
+        setTimeout(() => nameInput.focus(), 0);
     }
-    
-    // Disable Add button
-    const addButtons = document.querySelectorAll('.add-table-row-button[data-action="addScenario"]');
-    addButtons.forEach(btn => btn.disabled = true);
-    
-    // Create new row
-    const newRow = document.createElement('tr');
-    newRow.className = 'header-row editing new-row';
-    newRow.innerHTML = `
-        <td></td>
-        <td>
-            <input type="text" class="header-cell-input" value="" data-scenario-part="name" placeholder="Scenario name" />
-        </td>
-        <td style="text-align: center;">
-            <button class="icon-button save-new-row" data-action="saveNewScenario" title="Save"><span class="codicon codicon-check"></span></button>
-            <button class="icon-button" data-action="cancelNewScenario" title="Cancel"><span class="codicon codicon-close"></span></button>
-        </td>
-    `;
-    
-    // Insert before the "Add" button row
-    const addRow = table.querySelector('.add-row');
-    if (addRow) {
-        table.insertBefore(newRow, addRow);
-    } else {
-        table.appendChild(newRow);
-    }
-    
-    // Focus the input
-    setTimeout(() => {
-        const nameInput = newRow.querySelector('input[data-scenario-part="name"]');
-        if (nameInput) {
-            nameInput.focus();
-        }
-    }, 50);
 }
 
 function removeNewScenarioRow() {
-    const table = document.querySelector('.scenarios-table tbody');
-    if (!table) return;
-    
-    const newRow = table.querySelector('tr.new-row');
-    if (newRow) {
-        newRow.remove();
-    }
-    
-    // Re-enable Add button
-    const addButtons = document.querySelectorAll('.add-table-row-button[data-action="addScenario"]');
-    addButtons.forEach(btn => btn.disabled = false);
+    const form = document.querySelector('#template-tab .scenario-new-form');
+    if (!form) return;
+    form.hidden = true;
+    const nameInput = form.querySelector('.scenario-new-input');
+    if (nameInput) nameInput.value = '';
 }
 
 function showNewRow(message) {
@@ -3366,10 +3370,526 @@ function cssEscape(value) {
     return String(value).replace(/"/g, '\\"');
 }
 
+// =============================================================================
+// Layout: scenario list, scenario detail tabs, filters, section index
+// UI-only state (collapsed groups, filters, open tab, scroll) survives the full
+// re-renders the extension does after structural changes via vscode.setState.
+// =============================================================================
 
+function getUiState() {
+    return vscode.getState() || {};
+}
 
+function updateUiState(patch) {
+    vscode.setState({ ...getUiState(), ...patch });
+}
 
+function requestScenarioSwitch(name) {
+    if (!name) return;
+    // Save any pending inline edits first so they apply to the scenario being left
+    const focused = document.activeElement;
+    if (focused && focused.matches('input, textarea, select')) {
+        focused.blur();
+    }
+    syncScenarioSelection(name);
+    setTimeout(() => {
+        vscode.postMessage({ command: 'switchScenario', scenario: name });
+    }, 100);
+}
 
+function syncScenarioSelection(name) {
+    document.querySelectorAll('#template-tab .scenario-item').forEach(item => {
+        item.classList.toggle('active', item.getAttribute('data-scenario-name') === name);
+    });
+    const picker = document.getElementById('scenario-picker');
+    if (picker && picker.value !== name) {
+        picker.value = name;
+    }
+    const title = document.querySelector('#template-tab .scenario-title');
+    if (title) {
+        title.textContent = name;
+    }
+    // Editor-header rename/delete act on the selected scenario (never Default)
+    const actions = document.querySelector('#template-tab .scenario-detail-actions');
+    if (actions) {
+        actions.hidden = name === 'Default';
+        actions.querySelectorAll('[data-name]').forEach(el => el.setAttribute('data-name', name));
+    }
+}
 
+function findByDataAttribute(selector, attribute, value) {
+    return [...document.querySelectorAll(selector)].find(el => el.getAttribute(attribute) === value);
+}
 
+function startScenarioRename(name, scope) {
+    // Rename inline either in the scenario list or in the scenario editor header
+    const container = scope === 'detail'
+        ? document.querySelector('#template-tab .scenario-detail-header')
+        : findByDataAttribute('#template-tab .scenario-item', 'data-scenario-name', name);
+    if (container) startRenameIn(container, name);
+}
 
+function startRenameIn(container, name) {
+    const input = container.querySelector('.scenario-rename-input');
+    const label = container.querySelector('.rename-label');
+    if (!input || !label) return;
+    container.classList.add('renaming');
+    label.hidden = true;
+    input.hidden = false;
+    input.setAttribute('data-old-name', name);
+    input.value = name;
+    input.focus();
+    input.select();
+}
+
+function finishScenarioRename(input, commit) {
+    const container = input.closest('.rename-scope');
+    if (!container || !container.classList.contains('renaming')) return;
+    const oldName = input.getAttribute('data-old-name');
+    const newName = input.value.trim();
+    container.classList.remove('renaming');
+    input.hidden = true;
+    const label = container.querySelector('.rename-label');
+    if (label) label.hidden = false;
+    if (commit && newName && newName !== oldName) {
+        // The extension re-renders the panel after renaming
+        const command = container.getAttribute('data-rename-command') || 'renameScenario';
+        if (command === 'renameTemplateGroup') {
+            updateUiState({ selectedGroup: newName });
+        }
+        vscode.postMessage({ command, oldName, newName });
+    } else {
+        input.value = oldName;
+    }
+}
+
+function toggleScenarioGroup(groupName) {
+    const group = findByDataAttribute('#template-tab .scenario-group', 'data-group', groupName);
+    if (!group) return;
+    const collapsed = !group.classList.contains('collapsed');
+    group.classList.toggle('collapsed', collapsed);
+    const stored = new Set(getUiState().collapsedGroups || []);
+    if (collapsed) { stored.add(groupName); } else { stored.delete(groupName); }
+    updateUiState({ collapsedGroups: [...stored] });
+}
+
+function applyScenarioFilter() {
+    const input = document.getElementById('scenario-filter');
+    const query = (input ? input.value : '').trim().toLowerCase();
+    let visible = 0;
+    document.querySelectorAll('#template-tab .scenario-item').forEach(item => {
+        const name = (item.getAttribute('data-scenario-name') || '').toLowerCase();
+        const match = !query || name.includes(query);
+        item.hidden = !match;
+        if (match) visible++;
+    });
+    document.querySelectorAll('#template-tab .scenario-group').forEach(group => {
+        group.hidden = ![...group.querySelectorAll('.scenario-item')].some(item => !item.hidden);
+        // While filtering, show matches even inside collapsed groups
+        group.classList.toggle('filtering', !!query);
+    });
+    const empty = document.querySelector('#template-tab .scenario-filter-empty');
+    if (empty) empty.hidden = visible > 0;
+    updateUiState({ scenarioFilter: query });
+}
+
+function isVariableOverridden(row) {
+    const checkbox = row.querySelector('input[type="checkbox"][data-action="toggleScenarioVariableOverride"]');
+    return !!(checkbox && checkbox.checked);
+}
+
+function refreshVariableListUi() {
+    const tbody = document.getElementById('scenario-variables-tbody');
+    if (!tbody) return;
+    const filterInput = document.getElementById('variable-filter');
+    const overriddenOnly = document.getElementById('variable-overridden-only');
+    const query = (filterInput ? filterInput.value : '').trim().toLowerCase();
+    const onlyOverridden = !!(overriddenOnly && overriddenOnly.checked);
+
+    const rows = [...tbody.querySelectorAll('tr[data-variable-name]')]
+        .filter(row => row.getAttribute('data-variable-name') !== '__new__');
+    let visible = 0;
+    rows.forEach(row => {
+        const name = (row.getAttribute('data-variable-name') || '').toLowerCase();
+        const match = (!query || name.includes(query)) && (!onlyOverridden || isVariableOverridden(row));
+        row.hidden = !match;
+        if (match) visible++;
+    });
+
+    const count = document.getElementById('scenario-variables-count');
+    if (count) {
+        count.textContent = (query || onlyOverridden) ? `${visible}/${rows.length}` : String(rows.length);
+    }
+    const empty = document.querySelector('.var-filter-empty');
+    if (empty) empty.hidden = !(rows.length > 0 && visible === 0);
+}
+
+function switchDetailTab(panelName) {
+    document.querySelectorAll('.detail-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.getAttribute('data-panel') === panelName);
+    });
+    document.querySelectorAll('.detail-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.getAttribute('data-panel') === panelName);
+    });
+    updateUiState({ detailTab: panelName });
+}
+
+function handleLayoutClick(e) {
+    const button = e.target.closest('[data-action]');
+    if (!button) return;
+    switch (button.getAttribute('data-action')) {
+        case 'selectScenario':
+            requestScenarioSwitch(button.getAttribute('data-name'));
+            break;
+        case 'startScenarioRename':
+            startScenarioRename(button.getAttribute('data-name'), button.getAttribute('data-scope'));
+            break;
+        case 'toggleScenarioGroup':
+            toggleScenarioGroup(button.getAttribute('data-group'));
+            break;
+        case 'switchDetailTab':
+            switchDetailTab(button.getAttribute('data-panel'));
+            break;
+        case 'scrollToSection': {
+            const target = document.getElementById(button.getAttribute('data-target'));
+            if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            break;
+        }
+        case 'reloadTemplateContext':
+            reloadTemplateContext();
+            break;
+    }
+}
+
+function handleLayoutKeydown(e) {
+    const target = e.target;
+    if (target.matches('.scenario-rename-input')) {
+        if (e.key === 'Enter') { e.preventDefault(); finishScenarioRename(target, true); }
+        if (e.key === 'Escape') { e.preventDefault(); finishScenarioRename(target, false); }
+    } else if (target.matches('.scenario-new-input')) {
+        if (e.key === 'Enter') { e.preventDefault(); saveNewScenario(); }
+        if (e.key === 'Escape') { e.preventDefault(); removeNewScenarioRow(); }
+    } else if (target.matches('.scenario-select') && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+        // Arrow keys move focus between visible scenarios; Enter/Space selects
+        e.preventDefault();
+        const buttons = [...target.closest('.scenario-list').querySelectorAll('.scenario-select')]
+            .filter(el => el.offsetParent !== null);
+        const next = buttons[buttons.indexOf(target) + (e.key === 'ArrowDown' ? 1 : -1)];
+        if (next) next.focus();
+    }
+}
+
+function setupLayoutInteractions() {
+    document.addEventListener('click', handleLayoutClick);
+    document.addEventListener('keydown', handleLayoutKeydown);
+    document.addEventListener('blur', (e) => {
+        if (e.target.matches && e.target.matches('.scenario-rename-input')) {
+            finishScenarioRename(e.target, true);
+        }
+    }, true);
+
+    const picker = document.getElementById('scenario-picker');
+    if (picker) {
+        picker.addEventListener('change', () => requestScenarioSwitch(picker.value));
+    }
+
+    const scenarioFilter = document.getElementById('scenario-filter');
+    if (scenarioFilter) {
+        scenarioFilter.addEventListener('input', applyScenarioFilter);
+    }
+
+    const variableFilter = document.getElementById('variable-filter');
+    if (variableFilter) {
+        variableFilter.addEventListener('input', () => {
+            refreshVariableListUi();
+            updateUiState({ variableFilter: variableFilter.value });
+        });
+    }
+    const overriddenOnly = document.getElementById('variable-overridden-only');
+    if (overriddenOnly) {
+        overriddenOnly.addEventListener('change', () => {
+            refreshVariableListUi();
+            updateUiState({ overriddenOnly: overriddenOnly.checked });
+        });
+    }
+
+    // Rows are replaced in place on scenario switches and variable edits
+    const variablesTbody = document.getElementById('scenario-variables-tbody');
+    if (variablesTbody) {
+        new MutationObserver(refreshVariableListUi).observe(variablesTbody, { childList: true, subtree: true });
+    }
+
+    const bindings = document.getElementById('template-bindings');
+    if (bindings) {
+        bindings.addEventListener('toggle', () => updateUiState({ bindingsOpen: bindings.open }));
+    }
+
+    // Remember scroll positions of the scrolling containers
+    let scrollTimer;
+    const rememberScroll = () => {
+        clearTimeout(scrollTimer);
+        scrollTimer = setTimeout(() => {
+            const list = document.querySelector('#template-tab .scenario-list');
+            updateUiState({
+                templateScroll: document.getElementById('template-tab')?.scrollTop || 0,
+                environmentScroll: document.getElementById('environment-tab')?.scrollTop || 0,
+                groupsScroll: document.getElementById('groups-tab')?.scrollTop || 0,
+                scenarioListScroll: list ? list.scrollTop : 0
+            });
+        }, 150);
+    };
+    ['template-tab', 'environment-tab', 'groups-tab'].forEach(id => {
+        document.getElementById(id)?.addEventListener('scroll', rememberScroll, { passive: true });
+    });
+    document.querySelector('#template-tab .scenario-list')?.addEventListener('scroll', rememberScroll, { passive: true });
+}
+
+function restoreScrollPositions(state) {
+    const templateTab = document.getElementById('template-tab');
+    if (templateTab && state.templateScroll) templateTab.scrollTop = state.templateScroll;
+    const environmentTab = document.getElementById('environment-tab');
+    if (environmentTab && state.environmentScroll) environmentTab.scrollTop = state.environmentScroll;
+    const groupsTab = document.getElementById('groups-tab');
+    if (groupsTab && state.groupsScroll) groupsTab.scrollTop = state.groupsScroll;
+
+    const list = document.querySelector('#template-tab .scenario-list');
+    if (!list) return;
+    if (state.scenarioListScroll) {
+        list.scrollTop = state.scenarioListScroll;
+    }
+    // Keep the active scenario in view (e.g. after it was switched from the preview)
+    const active = list.querySelector('.scenario-item.active');
+    if (active && !active.hidden) {
+        const listRect = list.getBoundingClientRect();
+        const itemRect = active.getBoundingClientRect();
+        if (itemRect.top < listRect.top || itemRect.bottom > listRect.bottom) {
+            active.scrollIntoView({ block: 'center' });
+        }
+    }
+}
+
+function restoreLayoutState() {
+    const state = getUiState();
+
+    (state.collapsedGroups || []).forEach(name => {
+        const group = findByDataAttribute('#template-tab .scenario-group', 'data-group', name);
+        if (group) group.classList.add('collapsed');
+    });
+
+    const scenarioFilter = document.getElementById('scenario-filter');
+    if (scenarioFilter && state.scenarioFilter) {
+        scenarioFilter.value = state.scenarioFilter;
+    }
+    applyScenarioFilter();
+
+    const variableFilter = document.getElementById('variable-filter');
+    if (variableFilter && state.variableFilter) {
+        variableFilter.value = state.variableFilter;
+    }
+    const overriddenOnly = document.getElementById('variable-overridden-only');
+    if (overriddenOnly && state.overriddenOnly) {
+        overriddenOnly.checked = true;
+    }
+    refreshVariableListUi();
+
+    if (state.detailTab) {
+        switchDetailTab(state.detailTab);
+    }
+
+    // Bindings are rarely edited: collapsed unless the user opened them
+    const bindings = document.getElementById('template-bindings');
+    if (bindings) {
+        bindings.open = !!state.bindingsOpen;
+    }
+
+    restoreScrollPositions(state);
+}
+
+setupLayoutInteractions();
+restoreLayoutState();
+
+// =============================================================================
+// Template Groups tab: group list, group detail, links from Template Context
+// =============================================================================
+
+const UNGROUPED_GROUP = '__ungrouped__';
+const FOLLOW_TEMPLATE = '__template__:';
+
+function groupsTab() {
+    return document.getElementById('groups-tab');
+}
+
+function selectGroup(name, options = {}) {
+    const root = groupsTab();
+    if (!root) return;
+    const details = [...root.querySelectorAll('.group-detail')];
+    if (name && name.startsWith(FOLLOW_TEMPLATE)) {
+        // Select whichever group now contains this template (e.g. a group just created from it)
+        const template = name.slice(FOLLOW_TEMPLATE.length);
+        const owner = details.find(d => d.getAttribute('data-group-name') !== UNGROUPED_GROUP &&
+            [...d.querySelectorAll('.group-member-row')].some(row => row.getAttribute('data-template') === template));
+        name = owner ? owner.getAttribute('data-group-name') : UNGROUPED_GROUP;
+    }
+    if (!details.some(d => d.getAttribute('data-group-name') === name)) {
+        // Unknown (e.g. deleted or renamed elsewhere): fall back to the template's group
+        name = root.querySelector('.groups-layout')?.getAttribute('data-default-group') || UNGROUPED_GROUP;
+    }
+    root.querySelectorAll('.group-item').forEach(item => {
+        item.classList.toggle('active', item.getAttribute('data-group-name') === name);
+    });
+    let selectedDetail;
+    details.forEach(detail => {
+        const match = detail.getAttribute('data-group-name') === name;
+        detail.hidden = !match;
+        if (match) selectedDetail = detail;
+    });
+    const picker = document.getElementById('group-picker');
+    if (picker) picker.value = name;
+    updateUiState({ selectedGroup: name });
+
+    if (options.revealCurrent && selectedDetail) {
+        const row = selectedDetail.querySelector('.group-member-row.is-current');
+        if (row) {
+            row.scrollIntoView({ block: 'center' });
+            row.classList.add('flash');
+            setTimeout(() => row.classList.remove('flash'), 1600);
+        }
+    }
+}
+
+/** From the Template Context header: open this tab on the template's group. */
+function showTemplateGroup(groupName) {
+    switchTab('groups');
+    selectGroup(groupName || UNGROUPED_GROUP, { revealCurrent: true });
+    const item = groupsTab()?.querySelector('.group-item.active');
+    if (item) item.scrollIntoView({ block: 'nearest' });
+}
+
+function applyGroupFilter() {
+    const root = groupsTab();
+    const input = document.getElementById('group-filter');
+    if (!root || !input) return;
+    const query = input.value.trim().toLowerCase();
+    let visible = 0;
+    root.querySelectorAll('.group-item').forEach(item => {
+        const match = !query || (item.getAttribute('data-search') || '').includes(query);
+        item.hidden = !match;
+        if (match) visible++;
+    });
+    const divider = root.querySelector('.group-list-divider');
+    if (divider) divider.hidden = !!query;
+    const empty = root.querySelector('.group-filter-empty');
+    if (empty) empty.hidden = visible > 0;
+    updateUiState({ groupFilter: query });
+}
+
+function showNewGroupForm(show) {
+    const form = groupsTab()?.querySelector('.group-new-form');
+    if (!form) return;
+    form.hidden = !show;
+    const input = form.querySelector('.group-new-input');
+    if (input) {
+        input.value = '';
+        if (show) setTimeout(() => input.focus(), 0);
+    }
+}
+
+function saveNewGroup() {
+    const input = groupsTab()?.querySelector('.group-new-input');
+    const name = input ? input.value.trim() : '';
+    if (!name) {
+        if (input) input.focus();
+        return;
+    }
+    // The extension asks for the member templates, then re-renders
+    updateUiState({ selectedGroup: name });
+    vscode.postMessage({ command: 'createTemplateGroup', name });
+    showNewGroupForm(false);
+}
+
+function startGroupRename(name) {
+    const detail = findByDataAttribute('#groups-tab .group-detail', 'data-group-name', name);
+    const header = detail?.querySelector('.rename-scope');
+    if (header) startRenameIn(header, name);
+}
+
+function handleGroupsClick(e) {
+    const button = e.target.closest('[data-action]');
+    if (!button) return;
+    const name = button.getAttribute('data-name');
+    const template = button.getAttribute('data-template');
+    switch (button.getAttribute('data-action')) {
+        case 'selectGroup':
+            selectGroup(name);
+            break;
+        case 'showTemplateGroup':
+            showTemplateGroup(button.getAttribute('data-group'));
+            break;
+        case 'addTemplateGroup':
+            showNewGroupForm(true);
+            break;
+        case 'saveNewTemplateGroup':
+            saveNewGroup();
+            break;
+        case 'cancelNewTemplateGroup':
+            showNewGroupForm(false);
+            break;
+        case 'startGroupRename':
+            startGroupRename(name);
+            break;
+        case 'deleteTemplateGroup':
+            vscode.postMessage({ command: 'deleteTemplateGroup', name });
+            break;
+        case 'addTemplatesToGroup':
+            vscode.postMessage({ command: 'addTemplatesToGroup', name });
+            break;
+        case 'removeTemplateFromGroup':
+            vscode.postMessage({ command: 'removeTemplateFromGroup', name, template });
+            break;
+        case 'createGroupFromTemplate':
+            // The name is chosen in a VS Code prompt, so follow the template instead
+            updateUiState({ selectedGroup: FOLLOW_TEMPLATE + template });
+            vscode.postMessage({ command: 'createTemplateGroup', template });
+            break;
+        case 'openTemplate':
+            vscode.postMessage({ command: 'openTemplate', template });
+            break;
+    }
+}
+
+function setupGroupsInteractions() {
+    document.addEventListener('click', handleGroupsClick);
+
+    document.addEventListener('keydown', (e) => {
+        if (e.target.matches && e.target.matches('.group-new-input')) {
+            if (e.key === 'Enter') { e.preventDefault(); saveNewGroup(); }
+            if (e.key === 'Escape') { e.preventDefault(); showNewGroupForm(false); }
+        }
+    });
+
+    document.addEventListener('change', (e) => {
+        const select = e.target;
+        if (select.matches && select.matches('.add-to-group-select') && select.value) {
+            const name = select.value;
+            updateUiState({ selectedGroup: name });
+            vscode.postMessage({ command: 'addTemplateToGroup', name, template: select.getAttribute('data-template') });
+            select.value = '';
+        }
+    });
+
+    document.getElementById('group-picker')?.addEventListener('change', (e) => selectGroup(e.target.value));
+    document.getElementById('group-filter')?.addEventListener('input', applyGroupFilter);
+}
+
+function restoreGroupsState() {
+    const state = getUiState();
+    const filter = document.getElementById('group-filter');
+    if (filter && state.groupFilter) {
+        filter.value = state.groupFilter;
+    }
+    applyGroupFilter();
+    selectGroup(state.selectedGroup);
+}
+
+setupGroupsInteractions();
+restoreGroupsState();

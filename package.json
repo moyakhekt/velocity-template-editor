@@ -2,9 +2,21 @@
   "name": "velocity-template-editor",
   "displayName": "Velocity Template Editor",
   "description": "Apache Velocity template editor with syntax highlighting, live preview, variable management, and method mocks",
-  "version": "0.0.1",
-  "publisher": "velocity-editor",
-  "icon": "logo.png",
+  "version": "0.1.0",
+  "publisher": "moyakhekt",
+  "author": {
+    "name": "Khululekile Trevor Moyakhe"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/moyakhekt/velocity-template-editor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/moyakhekt/velocity-template-editor/issues"
+  },
+  "homepage": "https://github.com/moyakhekt/velocity-template-editor#readme",
+  "icon": "media/logo.png",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -13,8 +25,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onLanguage:velocity",
-    "onLanguage:html"
+    "onLanguage:velocity"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -28,10 +39,9 @@
         "extensions": [
           ".vm",
           ".vtl",
-          ".velocity",
-          ".html"
+          ".velocity"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./syntaxes/language-configuration.json"
       }
     ],
     "grammars": [
@@ -72,7 +82,31 @@
         "icon": "$(tools)"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "velocity",
+          "title": "Velocity",
+          "icon": "media/velocity-activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "velocity": [
+        {
+          "type": "webview",
+          "id": "velocity.contextManager",
+          "name": "Context Manager"
+        }
+      ]
+    },
     "menus": {
+      "commandPalette": [
+        {
+          "command": "velocity.detectInHtml",
+          "when": "editorLangId == html"
+        }
+      ],
       "editor/title": [
         {
           "command": "velocity.preview",
@@ -83,15 +117,17 @@
           "command": "velocity.manageContext",
           "when": "resourceLangId == velocity",
           "group": "navigation"
-        },
+        }
+      ],
+      "view/title": [
         {
           "command": "velocity.runScreenshots",
-          "when": "activeWebviewPanelId == 'velocityContext'",
+          "when": "view == velocity.contextManager",
           "group": "navigation"
         },
         {
           "command": "velocity.openDevTools",
-          "when": "activeWebviewPanelId == 'velocityContext'",
+          "when": "view == velocity.contextManager",
           "group": "navigation"
         }
       ],
@@ -109,7 +145,12 @@
         "velocity.useApacheVelocity": {
           "type": "boolean",
           "default": true,
-          "description": "Use Apache Velocity engine for 100% compatibility. Requires Java 11+ and Maven build."
+          "description": "Use Apache Velocity engine for 100% compatibility. Requires Java 17+ and Maven build."
+        },
+        "velocity.debugLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log debug details: the Velocity server's render steps and each render request (Output › Velocity Server), and the preview page's navigation interception (browser console). Always on when running the extension from source. The server's logging changes after VS Code restarts."
         },
         "velocity.preview.autoRefresh": {
           "type": "boolean",
@@ -137,7 +178,7 @@
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
-    "@types/node": "^20.x",
+    "@types/node": "^20.19.43",
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.x",
     "@typescript-eslint/parser": "^6.x",

@@ -1,312 +1,135 @@
-# Velocity Template Editor - Architecture Documentation
+# Architecture
 
-## Overview
+The extension has three parts:
 
-This document describes the event-driven architecture for the Velocity Template Editor VS Code extension. The architecture eliminates full-page refreshes in favor of targeted, reactive DOM updates.
-
-## Core Principles
-
-1. **Single Source of Truth**: `ContextState` holds all template and environment context data in memory
-2. **Event-Driven Updates**: Changes emit events that trigger targeted UI updates
-3. **Change Detection**: Updates only occur when data actually changes (deep equality check)
-4. **File Synchronization**: File system writes are suspended during programmatic updates to prevent recursive triggers
-5. **No Full Page Refreshes**: Every operation sends specific update messages to update only affected DOM elements
-
-## Architecture Components
-
-```mermaid
-graph TB
-    subgraph "VS Code Extension Host"
-        CM[ContextManager]
-        CS[ContextState]
-        FW[FileSystemWatcher]
-        PP[PreviewProvider]
-    end
-    
-    subgraph "Webview UI"
-        WV[Webview HTML/JS]
-        DOM[DOM Elements]
-    end
-    
-    subgraph "File System"
-        TCF[Template Context Files<br/>.context.json]
-        ECF[Environment Context File<br/>.json]
-    end
-    
-    User -->|Actions| WV
-    WV -->|postMessage<br/>Commands| CM
-    CM -->|Updates| CS
-    CS -->|Events| CM
-    CM -->|postMessage<br/>Updates| WV
-    WV -->|Update DOM| DOM
-    CS <-->|Read/Write<br/>Suspended| TCF
-    CS <-->|Read/Write<br/>Suspended| ECF
-    FW -->|File Change| CS
-    CS -->|Context Data| PP
-    PP -->|Render| User
+```
+VS Code extension host (TypeScript, extension/)
+ ├─ Context Manager view ── webview UI (webview-ui/) ── postMessage
+ ├─ Preview server (Node http, localhost) ── browser tab
+ └─ Velocity server client ── HTTP + token ── Java Velocity server (server/)
 ```
 
-## State Management Flow
+- The **extension** owns all state: it reads and writes the environment context file and drives the UI.
+- The **Java server** only renders: given a template and values, it returns HTML.
+- The **browser tab** shows the preview, served by the extension's own local server.
 
-### Scenario Switching
+## Layout
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Webview
-    participant ContextManager
-    participant ContextState
-    participant FileSystem
-    
-    User->>Webview: Click scenario radio button
-    Webview->>ContextManager: postMessage({command: 'switchScenario', scenario: 'Test'})
-    ContextManager->>ContextState: updateTemplateContext(ctx => ctx.activeScenario = 'Test')
-    
-    alt Data Actually Changed
-        ContextState->>ContextState: deep equality check
-        ContextState->>ContextState: emit change event
-        ContextState->>FileSystem: writeFileSync (watcher suspended)
-        Note over ContextState,FileSystem: 100ms suppression window
-        ContextState-->>ContextManager: change event fired
-        ContextManager->>ContextManager: generate scenario HTML
-        ContextManager->>Webview: postMessage({command: 'updateScenario', ...data})
-        Webview->>Webview: updateScenarioDOM()
-        Note over Webview: Updates:<br/>- Radio button checked<br/>- Scenario title<br/>- URL input & source<br/>- Headers table<br/>- Variables table
-    else No Change
-        ContextState->>ContextState: skip emit & file write
-    end
+```
+extension/
+  extension.ts                 Activation: commands, view, watchers, server start
+  preview.ts                   Preview server, page and toolbar, live updates
+  context/
+    contextManager.ts          Context Manager view provider; loads/saves the context file,
+                               builds render contexts, dispatches webview messages
+    contextManagerServices.ts  Pure helpers (scenario variables, URLs, headers) and the
+                               IContextServices interface the services depend on
+    contextWebviewRenderer.ts  Builds the view's HTML from webview-ui/webview.html
+    environmentContextService.ts  Environment tab: file, messages, headers, CSP, variables, mocks
+    scenarioService.ts         Scenarios: create/rename/delete/switch, variables, request
+    templateDataService.ts     Template variables and their values
+    templateGroupService.ts    Template groups
+    inputDialogService.ts      Input prompts
+    contextState.ts            Event-emitting state store (tested, not yet wired in)
+  server/
+    velocityServerClient.ts    Starts the Java server and calls it
+    screenshotRunner.ts        Screenshot tests (playwright-core, system Chrome/Edge)
+  shared/
+    templateParser.ts          Static analysis of templates (variables, methods, params, branches)
+    messageTypes.ts            Webview ↔ extension message types and validation
+    types.ts                   Context file types
+    debugLogging.ts            The velocity.debugLogging switch
+webview-ui/                    Context Manager HTML, CSS and script (copied to out/ by the build)
+server/                        Java Velocity server (Maven), see SERVER.md
+syntaxes/                      TextMate grammar and language configuration
+media/                         Logos and the Activity Bar icon
 ```
 
-### Variable Update
+## Activation
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Webview
-    participant ContextManager
-    participant ContextState
-    participant FileSystem
-    
-    User->>Webview: Edit variable value in table
-    Webview->>Webview: onBlur/onChange event
-    Webview->>ContextManager: postMessage({command: 'saveScenarioVariable', name: 'user', value: 'John'})
-    ContextManager->>ContextState: updateTemplateContext(ctx => {...})
-    ContextState->>ContextState: deep equality check
-    
-    alt Data Changed
-        ContextState->>FileSystem: writeFileSync (suppressed)
-        ContextState-->>ContextManager: emit change event
-        ContextManager->>Webview: postMessage({command: 'updateScenarioVariable', name: 'user', value: 'John'})
-        Webview->>Webview: updateScenarioVariableDOM()
-        Note over Webview: Updates only the<br/>specific variable row
-    end
+The extension activates for the `velocity` language, its commands, and its view. `activate()`:
+
+1. starts the Java server (unless `velocity.useApacheVelocity` is off);
+2. creates the `ContextManager` and `VelocityPreviewProvider`;
+3. registers commands, the Context Manager view (`velocity.contextManager`), and watchers for document edits and `.properties` saves.
+
+On deactivation the preview tells open tabs to close, and the Java server is shut down.
+
+## Context Manager
+
+`ContextManager` is a `WebviewViewProvider` in the side bar. It holds the loaded environment context in memory and saves the whole file on each change. A file watcher, with a suppression counter around the extension's own writes, picks up external edits.
+
+The view is rendered from `webview-ui/webview.html` by `ContextWebviewRenderer`. User actions post messages, which `handleWebviewMessage` validates (`isWebviewMessage`) and dispatches to the services. Most changes reply with targeted messages so the view updates in place; larger changes re-render the view.
+
+The services receive the manager as `IContextServices`, which keeps them independent of the class and testable.
+
+## Rendering
+
+`ContextManager.getContextForTemplate()` builds a template's values. The template's group's context is used if it's in one, otherwise its own entry under `templates`. The values are:
+
+1. the environment variables;
+2. the active scenario's values merged over them;
+3. a request object (`{ _httpServletRequest: true, url, headers }`) if the template uses one.
+
+`preview.ts` splits these into plain variables and method mocks (objects whose members have `_implementation`), and calls `VelocityServerClient.render()` with them, the messages files, the language, and the tool variable names.
+
+## Preview
+
+`VelocityPreviewProvider` runs a Node HTTP server on a free port in 8100–8200, bound to localhost.
+
+| Path | Serves |
+|------|--------|
+| `/velocity-preview.html` | The page: toolbar and frames. `?template=`, `?scenario=`, `?compare=` change what's previewed |
+| `/velocity-preview-content.html`, `/velocity-preview-compare.html` | The rendered templates, with the CSP tag, `<base>`, and the navigation-capture script |
+| `/__events` | Server-sent events: version numbers to reload the page or a frame, and `close` on shutdown |
+| `/__open-template` | Opens the previewed or compared template in VS Code |
+| anything else | Assets under the template root or its parent |
+
+Every request must be addressed to `localhost`/`127.0.0.1`/`[::1]` on the preview port, and must not come from another site (`Sec-Fetch-Site`). Asset paths are resolved, including symlinks, and refused outside their root. No CORS headers are sent.
+
+An open `/__events` connection is how the extension knows a tab is open: **Open Preview** reuses it instead of opening another. On shutdown, each tab gets `event: close` and closes itself. Navigation within the page uses `location.replace()` so the tab keeps a single history entry, which browsers require before a script may close a tab.
+
+## Java server
+
+`VelocityServerClient` starts `java -jar server/target/velocity-server-1.0.0.jar` with:
+- the newest Java 17+ it finds (`JAVA_HOME`, common JDK folders, `PATH`);
+- a random token in `VELOCITY_SERVER_TOKEN`.
+
+The server writes one line to stdout, `{"event":"ready","port":N}`, once it's listening; its logs go to stderr, which is shown in the **Velocity Server** output channel. Every request carries the token in `X-Velocity-Token`. See [SERVER.md](SERVER.md).
+
+## Building
+
+```bash
+npm install
+npm run compile        # esbuild: extension → out/extension.js; copies webview-ui/ and codicons into out/
+npm run build:java     # mvn clean package → server/target/velocity-server-1.0.0.jar
+npm run build:all      # both
+npm run watch          # rebuild the extension on change
 ```
 
-### File System Change (External Edit)
+Building the server needs Maven and JDK 17+.
 
-```mermaid
-sequenceDiagram
-    participant ExternalEditor
-    participant FileSystem
-    participant FileSystemWatcher
-    participant ContextState
-    participant ContextManager
-    participant Webview
-    
-    ExternalEditor->>FileSystem: Save .context.json file
-    FileSystem-->>FileSystemWatcher: onDidChange event
-    FileSystemWatcher->>ContextState: handleFileChange(filePath)
-    
-    alt Not Suppressed
-        ContextState->>FileSystem: readFileSync(filePath)
-        ContextState->>ContextState: deep equality check
-        
-        alt Data Changed
-            ContextState->>ContextState: emit change event
-            ContextState-->>ContextManager: change event
-            ContextManager->>Webview: postMessage({command: 'updateScenario', ...})
-            Webview->>Webview: Update affected DOM sections
-        end
-    else Suppressed (Programmatic Write)
-        ContextState->>ContextState: skip reload
-        Note over ContextState: Suppression cleared<br/>after 100ms
-    end
+## Running and debugging
+
+Press **F5** to start an Extension Development Host. In development mode `velocity.debugLogging` is always on:
+- the Java server logs each render step;
+- the client logs each render request;
+- the preview page logs captured navigation to the browser console.
+
+Use **Velocity: Open Developer Tools** to inspect the Context Manager view.
+
+## Tests
+
+```bash
+npm test
 ```
 
-### Create New Scenario
+Jest, with `vscode` mocked by `extension/__mocks__/vscode.ts`. The suites cover the template parser, message validation, scenario helpers, `ContextState`, and the preview server's security checks (which start the real server).
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Webview
-    participant ContextManager
-    participant ContextState
-    participant FileSystem
-    
-    User->>Webview: Click "New Scenario" button
-    Webview->>ContextManager: postMessage({command: 'createScenario'})
-    ContextManager->>ContextManager: showInputBox("Enter scenario name")
-    User->>ContextManager: Enter "Account Locked"
-    ContextManager->>ContextState: updateTemplateContext(ctx => {...})
-    Note over ContextState: ctx.scenarios['Account Locked'] = {variables: {}}<br/>ctx.activeScenario = 'Account Locked'
-    
-    ContextState->>FileSystem: writeFileSync (suppressed)
-    ContextState-->>ContextManager: emit change event
-    ContextManager->>ContextManager: generate radio button HTML
-    ContextManager->>Webview: postMessage({command: 'addScenario', scenarioName: 'Account Locked', radioButtonHtml: '...'})
-    Webview->>Webview: addScenarioDOM()
-    Note over Webview: - Adds new radio button<br/>- Switches to new scenario<br/>- Updates all scenario sections
+## Packaging
+
+```bash
+npx @vscode/vsce package
 ```
 
-## Key Classes
-
-### ContextState
-
-**Purpose**: Centralized state management with change detection and event emission.
-
-**Responsibilities**:
-- Store template and environment context in memory
-- Detect changes via deep equality comparison
-- Emit events only when data actually changes
-- Synchronize with file system (with watcher suspension)
-- Provide read-only snapshots of state
-
-**Key Methods**:
-```typescript
-loadTemplateContext(templatePath: string, contextPath: string): void
-loadEnvironmentContext(filePath: string): void
-updateTemplateContext(updater: (ctx: ContextFileData) => void, source: 'ui' | 'api'): void
-updateEnvironmentContext(updater: (ctx: ContextData) => void, source: 'ui' | 'api'): void
-getTemplateContext(): Readonly<ContextFileData> | null
-getEnvironmentContext(): Readonly<ContextData>
-getMergedContext(): ContextData
-handleFileChange(filePath: string): void
-```
-
-**Event System**:
-```typescript
-interface ContextStateChangeEvent {
-    type: 'templateContext' | 'environmentContext';
-    source: 'file' | 'ui' | 'api';
-    oldValue: any;
-    newValue: any;
-}
-```
-
-### ContextManager
-
-**Purpose**: Mediates between VS Code extension, ContextState, and Webview UI.
-
-**Responsibilities**:
-- Handle webview commands from UI
-- Subscribe to ContextState change events
-- Generate HTML for UI updates
-- Send targeted update messages to webview
-- Coordinate with PreviewProvider
-
-**Message Flow**:
-1. Receive command from webview via `postMessage`
-2. Update ContextState via updater function
-3. Listen for change event from ContextState
-4. Generate necessary HTML
-5. Send specific update message to webview
-
-### Webview Scripts
-
-**Purpose**: Handle DOM updates without full page reloads.
-
-**Key Functions**:
-```javascript
-updateScenarioDOM(msg)           // Switch scenario
-updateScenarioVariableDOM(msg)   // Update single variable
-updateScenarioHeaderDOM(msg)     // Update single header
-addScenarioDOM(msg)              // Add new scenario
-deleteScenarioDOM(msg)           // Remove scenario
-renameScenarioDOM(msg)           // Rename scenario
-updateUrlDOM(msg)                // Update URL field
-```
-
-**Update Strategy**:
-- Find specific DOM element by ID or data attribute
-- Update only that element's content/attributes
-- Preserve scroll position
-- Maintain focus where appropriate
-- No innerHTML replacement of large sections
-
-## File System Synchronization
-
-### Write Suppression
-
-To prevent infinite loops when writing to files monitored by FileSystemWatcher:
-
-1. ContextState sets `suppressFileWrite = true`
-2. Writes to file system
-3. Sets timeout to clear flag after 100ms
-4. FileSystemWatcher checks suppression flag in `handleFileChange()`
-5. If suppressed, skips reload
-
-```typescript
-private writeToFile(): void {
-    this.suppressFileWrite = true;
-    fs.writeFileSync(this.contextFilePath, JSON.stringify(this.templateContext, null, 2), 'utf8');
-    setTimeout(() => {
-        this.suppressFileWrite = false;
-    }, 100);
-}
-```
-
-### Cache Invalidation
-
-- ContextManager maintains a cache for performance
-- Cache is updated immediately when ContextState changes
-- FileSystemWatcher clears cache on external file changes
-- Lazy reload on next access
-
-## Performance Optimizations
-
-1. **Change Detection**: Deep equality check prevents unnecessary updates
-2. **Targeted DOM Updates**: Only affected elements are updated
-3. **Event Debouncing**: File system changes debounced via suppression window
-4. **HTML Pre-generation**: HTML generated once in extension, sent to webview
-5. **Lazy Load**: File reads deferred until needed
-
-## Migration Strategy
-
-The refactor from full-page refreshes to targeted updates is done incrementally:
-
-1. ✅ Create ContextState class with event system
-2. ✅ Define message types for all operations
-3. ✅ Create DOM update functions in webview
-4. 🔄 Refactor high-frequency operations (scenario switching, variable edits)
-5. 🔄 Refactor medium-frequency operations (headers, URLs)
-6. 🔄 Refactor low-frequency operations (create/delete scenarios)
-7. 🔄 Replace all `updateWebview()` calls with specific messages
-8. ✅ Document architecture and create sequence diagrams
-
-## Testing Strategy
-
-### Unit Tests
-- ContextState change detection
-- Deep equality comparisons
-- Event emission logic
-
-### Integration Tests
-- ContextManager → ContextState interaction
-- File system watcher behavior
-- Message passing between extension and webview
-
-### Manual Testing
-1. Switch scenarios → verify no scroll, data updates
-2. Edit variables → verify only that row updates
-3. Create scenario → verify radio button added correctly
-4. External file edit → verify UI reflects changes
-5. Rapid successive edits → verify no duplicate updates
-
-## Benefits of New Architecture
-
-1. **No Scroll Jumps**: Targeted updates preserve scroll position
-2. **Better Performance**: Only affected DOM elements are updated
-3. **Clearer Code**: Explicit message types instead of monolithic refresh
-4. **Easier Debugging**: Each operation has specific message flow
-5. **Maintainable**: Changes isolated to specific update handlers
-6. **Extensible**: New features add new message types, not complexity to existing code
+`vscode:prepublish` runs `build:all`. `.vscodeignore` keeps the package to what runs: `out/`, `media/` (logos and icons), `syntaxes/` (grammar and language configuration), the server jar, `playwright-core`, `README.md`, `CHANGELOG.md`, `LICENSE` and `package.json`. Check with `npx @vscode/vsce ls`.

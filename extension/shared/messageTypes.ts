@@ -28,7 +28,8 @@ export type WebviewUpdateMessage =
     | UpdateEnvironmentMockFunctionMessage
     | DeleteEnvironmentMockFunctionMessage
     | UpdateMethodSourceMessage
-    | UpdateVariableSourceMessage;
+    | UpdateVariableSourceMessage
+    | RefreshScenarioVariableRowMessage;
 
 // ---------------------------------------------------------------------------
 // Structured item types for scenario DOM updates
@@ -43,12 +44,17 @@ export interface ScenarioHeaderItem {
 
 export interface ScenarioVariableItem {
     name: string;
-    value: string;
+    ownValue: string;        // scenario's own value (when isOverride=true)
+    parentValue: string;     // inherited value (env for Default; Default for others)
     isJson: boolean;
-    /** 'self' or the name of the scenario being inherited from */
-    source: string;
-    /** Other scenario names that define this variable with source='self' */
-    inheritableFrom: string[];
+    isOverride: boolean;     // true = scenario has its own value
+    hasParent: boolean;      // true = a parent value exists (override checkbox enabled)
+    isJsonEditable: boolean; // true only in Default scenario
+}
+
+export interface RefreshScenarioVariableRowMessage {
+    command: 'refreshScenarioVariableRow';
+    variable: ScenarioVariableItem;
 }
 
 export interface UrlSourceOption {
@@ -216,6 +222,13 @@ export type WebviewCommandMessage =
     | ReloadEnvironmentContextCommand
     | ChangeTemplateContextFileCommand
     | ReloadTemplateContextCommand
+    | CreateTemplateGroupCommand
+    | RenameTemplateGroupCommand
+    | DeleteTemplateGroupCommand
+    | AddTemplatesToGroupCommand
+    | AddTemplateToGroupCommand
+    | RemoveTemplateFromGroupCommand
+    | OpenTemplateCommand
     | SaveEnvironmentPropertyCommand
     | SaveEnvironmentMethodCommand
     | PromoteToEnvironmentCommand
@@ -250,8 +263,10 @@ export type WebviewCommandMessage =
     | SaveNewScenarioVariableCommand
     | SaveScenarioVariableValueCommand
     | ToggleScenarioVariableJsonCommand
+    | ToggleScenarioVariableOverrideCommand
     | ChangeScenarioVariableSourceCommand
-    | GetAvailableScenarioVariablesCommand;
+    | GetAvailableScenarioVariablesCommand
+    | EditScenarioVariableInEditorCommand;
 
 export interface SwitchScenarioCommand {
     command: 'switchScenario';
@@ -414,6 +429,46 @@ export interface ChangeTemplateContextFileCommand {
 
 export interface ReloadTemplateContextCommand {
     command: 'reloadTemplateContext';
+}
+
+/** Template paths in group commands are stored (workspace-relative) paths. */
+export interface CreateTemplateGroupCommand {
+    command: 'createTemplateGroup';
+    name?: string;
+    template?: string; // create from this template's own scenarios
+}
+
+export interface RenameTemplateGroupCommand {
+    command: 'renameTemplateGroup';
+    oldName: string;
+    newName: string;
+}
+
+export interface DeleteTemplateGroupCommand {
+    command: 'deleteTemplateGroup';
+    name: string;
+}
+
+export interface AddTemplatesToGroupCommand {
+    command: 'addTemplatesToGroup';
+    name: string;
+}
+
+export interface AddTemplateToGroupCommand {
+    command: 'addTemplateToGroup';
+    name: string;
+    template: string;
+}
+
+export interface RemoveTemplateFromGroupCommand {
+    command: 'removeTemplateFromGroup';
+    name: string;
+    template: string;
+}
+
+export interface OpenTemplateCommand {
+    command: 'openTemplate';
+    template: string;
 }
 
 export interface SaveEnvironmentPropertyCommand {
@@ -639,6 +694,18 @@ export interface ToggleScenarioVariableJsonCommand {
     isJson: boolean;
 }
 
+export interface ToggleScenarioVariableOverrideCommand {
+    command: 'toggleScenarioVariableOverride';
+    name: string;
+    isOverride: boolean;
+}
+
+export interface ToggleScenarioVariablePassToContextCommand {
+    command: 'toggleScenarioVariablePassToContext';
+    name: string;
+    passToContext: boolean;
+}
+
 export interface ChangeScenarioVariableSourceCommand {
     command: 'changeScenarioVariableSource';
     name: string;
@@ -647,6 +714,12 @@ export interface ChangeScenarioVariableSourceCommand {
 
 export interface GetAvailableScenarioVariablesCommand {
     command: 'getAvailableScenarioVariables';
+}
+
+export interface EditScenarioVariableInEditorCommand {
+    command: 'editScenarioVariableInEditor';
+    name: string;
+    value: string;
 }
 
 // =============================================================================

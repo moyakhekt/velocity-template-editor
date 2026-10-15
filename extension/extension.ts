@@ -1,13 +1,17 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { VelocityPreviewProvider } from './preview';
 import { ContextManager } from './context/contextManager';
 import { VelocityServerClient } from './server/velocityServerClient';
+import { initDebugLogging } from './shared/debugLogging';
 
 let velocityServer: VelocityServerClient | undefined;
 let outputChannel: vscode.OutputChannel;
 
 export async function activate(context: vscode.ExtensionContext) {
-    // Create output channel FIRST so we can log to it
+    initDebugLogging(context);
+
+// Create output channel FIRST so we can log to it
     outputChannel = vscode.window.createOutputChannel('Velocity Server');
     
     // Don't automatically show the output channel
@@ -44,15 +48,11 @@ export async function activate(context: vscode.ExtensionContext) {
         outputChannel.appendLine('Apache Velocity is disabled in settings. Preview will not work.');
     }
 
-    // Detect Velocity syntax in HTML files on open
-    context.subscriptions.push(
-        vscode.workspace.onDidOpenTextDocument(detectVelocityInHtml)
-    );
+    // HTML files are never switched to Velocity automatically: plain HTML often has
+    // jQuery ($el) or template literals (${x}). Users opt in with Detect Velocity
+    // Syntax, which can add a files.associations entry for their template folders.
 
-    // Check already open documents
-    vscode.workspace.textDocuments.forEach(detectVelocityInHtml);
-
-    // Initialize managers
+// Initialize managers
     const contextManager = new ContextManager(context, outputChannel);
     const previewProvider = new VelocityPreviewProvider(context, contextManager, velocityServer);
     contextManager.setPreviewProvider(previewProvider);
@@ -107,14 +107,33 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Update active template when the user switches editor tabs
+    // Messages .properties files are read from disk by the server, so refresh on save.
+    // The watcher also catches edits made outside VS Code (workspace files only).
+    const propertiesWatcher = vscode.workspace.createFileSystemWatcher('**/*.properties');
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument(document => {
+            previewProvider.refreshIfMessagesFile(document.uri.fsPath);
+        }),
+        propertiesWatcher,
+        propertiesWatcher.onDidChange(uri => previewProvider.refreshIfMessagesFile(uri.fsPath)),
+        propertiesWatcher.onDidCreate(uri => previewProvider.refreshIfMessagesFile(uri.fsPath))
+    );
+
+    // The Context Manager follows the editor; the preview keeps showing the template
+    // chosen with the Preview command or its own Template menu.
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(editor => {
             if (editor && editor.document.languageId === 'velocity') {
-                const templatePath = editor.document.uri.fsPath;
-                contextManager.switchActiveTemplate(templatePath);
-                previewProvider.setActiveTemplate(templatePath);
+                contextManager.switchActiveTemplate(editor.document.uri.fsPath);
             }
+        })
+    );
+
+    // Context Manager view in the Velocity container on the Activity Bar
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(ContextManager.viewId, contextManager, {
+            // Keep unsaved edits, scroll position and the open tab while the view is hidden
+            webviewOptions: { retainContextWhenHidden: true },
         })
     );
 
@@ -124,25 +143,34 @@ export async function activate(context: vscode.ExtensionContext) {
     });
 }
 
-function detectVelocityInHtml(document: vscode.TextDocument): void {
-    if (document.languageId !== 'html') {
-        return;
-    }
-
-    const text = document.getText();
-    if (hasVelocitySyntax(text)) {
-        // Automatically set language to velocity if Velocity syntax detected
-        vscode.languages.setTextDocumentLanguage(document, 'velocity');
-    }
-}
-
 async function detectAndConvertToVelocity(document: vscode.TextDocument): Promise<void> {
     const text = document.getText();
-    if (hasVelocitySyntax(text)) {
-        await vscode.languages.setTextDocumentLanguage(document, 'velocity');
-        vscode.window.showInformationMessage('Velocity syntax detected! Language mode changed to Velocity.');
-    } else {
+    if (!hasVelocitySyntax(text)) {
         vscode.window.showInformationMessage('No Velocity syntax detected in this file.');
+        return;
+    }
+    await vscode.languages.setTextDocumentLanguage(document, 'velocity');
+
+    // Offer to make it stick for the template's folder (workspace files only)
+    const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+    const relativeDir = folder
+        ? path.posix.dirname(path.relative(folder.uri.fsPath, document.uri.fsPath).split(path.sep).join('/'))
+        : undefined;
+    if (relativeDir === undefined) {
+        vscode.window.showInformationMessage('Velocity syntax detected. Language mode changed to Velocity.');
+        return;
+    }
+    const pattern = relativeDir === '.' ? '**/*.html' : `**/${relativeDir}/**/*.html`;
+    const choice = await vscode.window.showInformationMessage(
+        `Velocity syntax detected. Language mode changed to Velocity. Always open ${pattern} as Velocity in this workspace?`,
+        'Always',
+        'Just This Time',
+    );
+    if (choice === 'Always') {
+        const config = vscode.workspace.getConfiguration('files', document.uri);
+        const associations = { ...(config.get<Record<string, string>>('associations') ?? {}), [pattern]: 'velocity' };
+        await config.update('associations', associations, vscode.ConfigurationTarget.Workspace);
+        vscode.window.showInformationMessage(`Added "${pattern}": "velocity" to files.associations in workspace settings.`);
     }
 }
 

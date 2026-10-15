@@ -4,6 +4,7 @@ node_modules
 *.vsix
 .DS_Store
 server/target/
+server/bin/
 *.class
 *.log
 *.backup

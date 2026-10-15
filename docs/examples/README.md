@@ -1,69 +1,18 @@
 # Examples
 
-This folder contains example Velocity templates, context files, and test scripts.
+Two templates and a context file that covers both.
 
-## Velocity Templates
+| File | Shows |
+|------|-------|
+| `profile.vm` | Variables, objects and lists; `#if`/`#elseif`, `#foreach`, `#set`; a mocked method (`$user.getEmail()`); `$!` for optional values; comments |
+| `login.vm` | Scenarios for each state of a page, the request tool (`getParameter`), the locale tool, and messages from a `.properties` file |
+| `environment-context.json` | The [context file](../CONTEXT-FILE.md): two scenarios for `profile.vm` and three for `login.vm` (each overriding only what differs from Default), and `user.getEmail` mapped to the `emailFromName` mock function |
+| `messages.properties` | The messages `login.vm` shows for each error |
 
-### example.vm
-Basic Velocity template demonstrating:
-- Variables (`$name`, `$user`)
-- Conditionals (`#if`, `#else`)
-- Loops (`#foreach`)
-- Method calls (`$user.getEmail()`)
-- Comments (`##`)
+## Try them
 
-### example-scenarios.vm
-Advanced template showcasing the scenario-based testing feature:
-- Multiple test scenarios in one context file
-- Scenario-specific variables
-- HttpServletRequest mocking
-- Locale handling
-- Template message system
-
-## Context Files
-
-### example.properties
-Properties file for template internationalization with `$templateMessages` tool.
-
-### example-scenarios.context.json
-Example context file with multiple scenarios showing:
-- Scenario management
-- Variable organization
-- Method implementations with JavaScript
-- HTTP headers configuration
-
-## Test Scripts
-
-### test-simple.js
-Basic test demonstrating template rendering with simple variables.
-
-### test-velocity-syntax.js
-Tests all Velocity syntax features (directives, variables, macros).
-
-### test-actual-data.js
-Real-world example with complex data structures.
-
-### test-utils-load.js
-Tests utility tools like `$locale`, `$templateMessages`, `$escape`, `$HttpServletRequest`.
-
-## Usage
-
-To use these examples:
-
-1. Open any `.vm` file in VS Code
-2. Press **F5** to launch Extension Development Host
-3. Open the example template in the new window
-4. Use **Ctrl+Shift+P** → "Velocity: Manage Context" to edit variables
-5. Use **Ctrl+Shift+P** → "Velocity: Open Preview" to see rendered output
-
-## Running Test Scripts
-
-```bash
-# From the extension root directory
-node docs/examples/test-simple.js
-node docs/examples/test-velocity-syntax.js
-node docs/examples/test-actual-data.js
-node docs/examples/test-utils-load.js
-```
-
-Note: Ensure the Velocity server is running before executing test scripts.
+1. Open this repository's folder in VS Code. The template paths in the context file are relative to it, for example `docs/examples/login.vm`.
+2. Open `login.vm`, click **Manage Context**, choose **Open Existing Context**, and pick `docs/examples/environment-context.json`.
+3. In **Environment Context** › **Messages Properties Files**, add `docs/examples/messages.properties`.
+4. Click **Open Preview**, then switch between **Default**, **Invalid password** and **Account locked** in the preview toolbar.
+5. Use the toolbar's **Template** menu to switch to `profile.vm`, and try its **New member** scenario.

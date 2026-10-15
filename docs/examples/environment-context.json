@@ -1,0 +1,50 @@
+{
+  "language": "en",
+  "headers": {},
+  "cspDirectives": {},
+  "context": {
+    "siteName": "Example Site"
+  },
+  "mockFunctions": {
+    "emailFromName": "return name.toLowerCase().replace(' ', '.') + '@example.com';"
+  },
+  "templates": {
+    "docs/examples/profile.vm": {
+      "mappedMethods": {
+        "user.getEmail": "emailFromName"
+      },
+      "activeScenario": "Default",
+      "scenarios": {
+        "Default": {
+          "variables": {
+            "user": "{\"name\": \"Ann Lee\", \"isPremium\": true, \"points\": 1250}",
+            "activities": "[{\"title\": \"Updated profile\", \"done\": true}, {\"title\": \"Verify email\", \"done\": false}]"
+          },
+          "variableJsonFlags": { "user": true, "activities": true }
+        },
+        "New member": {
+          "variables": {
+            "user": "{\"name\": \"Sam Smith\", \"isPremium\": false, \"points\": 40}",
+            "activities": "[]"
+          }
+        }
+      }
+    },
+    "docs/examples/login.vm": {
+      "activeScenario": "Default",
+      "scenarios": {
+        "Default": {
+          "url": "https://example.com/login?theme=dark",
+          "variables": { "username": "", "authnMessageKey": "", "showError": false }
+        },
+        "Invalid password": {
+          "variables": { "username": "ann", "authnMessageKey": "authn.invalid.credentials", "showError": true }
+        },
+        "Account locked": {
+          "variables": { "authnMessageKey": "authn.account.locked", "showError": true }
+        }
+      }
+    }
+  },
+  "templateGroups": {}
+}
